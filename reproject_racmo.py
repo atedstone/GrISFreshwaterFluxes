@@ -59,6 +59,9 @@ def pstere_lat2k0(lat):
 if grid == 'pstere':
 	grid_proj = pyproj.Proj('+init=EPSG:3413')
 	mask_out_file = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/mask_racmo_EPSG3413_5km.tif'
+	ice_topo_out_file = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/icetopo_racmo_EPSG3413_5km.tif'
+	topo_out_file = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/topo_racmo_EPSG3413_5km.tif'
+	landandice_mask_file = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/landandice_racmo_EPSG3413_5km.tif'
 elif grid == 'bamber':
 	grid_proj = pyproj.Proj('+proj=sterea +lat_0=90 +lat_ts=71 +lon_0=-39 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs')
 	mask_out_file = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/mask_racmo_bamberpstere_5km.tif'
@@ -159,7 +162,16 @@ ds = xr.Dataset({'runoff':da})
 ds.attrs['history'] = runoff.history + ' // This NetCDF generated using bitbucket atedstone/fwf/reproject_racmo.py on RACMO2.3_GRN11_runoff_monthly_1958-2015.nc provided by JLB/BN/MvdB'
 ds.attrs['author'] = 'Andrew Tedstone a.j.tedstone@bristol.ac.uk'
 ds.attrs['gridding method'] = 'cubic spline scipy.interpolate.griddata'
-ds.to_netcdf('/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/RACMO2.3_GRN11_EPSG3413_runoff_monthly_1958.nc')
+# ds.attrs['GeoTransform'] = (xi[0,0], (xi[0,1]-xi[0,0]), 0, yi[-1,0], 0, (yi[-2,0]-yi[-1,0]))
+# ds.attrs['Conventions'] = "CF-1.6"
+
+# ds.X.attrs['units'] = 'meters'
+# ds.X.attrs['long_name'] = 'Eastings'
+# ds.Y.attrs['units'] = 'meters'
+# ds.Y.attrs['long_name'] = 'Northings'
+
+ds.to_netcdf('/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/RACMO2.3_GRN11_EPSG3413_runoff_monthly_1958.nc',
+	format='NETCDF4')
 
 
 
@@ -177,28 +189,104 @@ if grid == 'bamber':
 
 
 ##############################################################################
-## Project masks(s)
+## Project masks(s) etc to geotiff
 # Use all the same grid logic as defined above
 print('Projecting mask(s)...')
 
-## Open RACMO masks (they are on same grid)
+# Set geoTransform for writing to geotiff
+trans = (xi[0,0], (xi[0,1]-xi[0,0]), 0, yi[-1,0], 0, (yi[-2,0]-yi[-1,0]))
+
+# Open RACMO masks (they are on same grid)
 masks_ds = xr.open_dataset('/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/RACMO2.3_GRN11_masks.nc')
 
-# Select mask of all ice areas; we'll need to split into numerical basins later
+
+## Mask of all ice areas; we'll need to split into numerical basins later
 mask_racmo = masks_ds.icecon.values
 # And flatten to a vector which matches the xy (grid coords) array order
 mask_racmo = mask_racmo.flatten()
 
 # Interpolate point data onto grid
 zi = interpolate.griddata(xy, mask_racmo, (xi, yi), method='nearest')
+mask_gridded = zi
 
 # Write to geotiff
-trans = (xi[0,0], (xi[0,1]-xi[0,0]), 0, yi[0,0], 0, (yi[1,0]-yi[0,0]))
 georaster.simple_write_geotiff(
 	mask_out_file,
-	zi, 
+	np.flipud(zi), 
 	trans,
 	proj4=grid_proj.srs,
 	dtype=georaster.gdal.GDT_Byte
 	)
 
+
+## Ice-only Topography
+ice_topo_racmo = masks_ds.topography.where(masks_ds.icecon == 1).values
+# And flatten to a vector which matches the xy (grid coords) array order
+ice_topo_racmo = ice_topo_racmo.flatten()
+
+# Interpolate point data onto grid
+zi = interpolate.griddata(xy, ice_topo_racmo, (xi, yi), method='linear')
+ice_topo_gridded = zi
+
+# Write to geotiff
+georaster.simple_write_geotiff(
+	ice_topo_out_file,
+	np.flipud(zi), 
+	trans,
+	proj4=grid_proj.srs,
+	dtype=georaster.gdal.GDT_Float64
+	)
+
+
+
+## All topography
+# Set oceans to zero!!
+topo_racmo = masks_ds.topography.where(masks_ds.topography > 1).values
+# And flatten to a vector which matches the xy (grid coords) array order
+topo_racmo = topo_racmo.flatten()
+
+# Interpolate point data onto grid
+zi = interpolate.griddata(xy, topo_racmo, (xi, yi), method='linear')
+
+# Write to geotiff
+georaster.simple_write_geotiff(
+	topo_out_file,
+	np.flipud(zi), 
+	trans,
+	proj4=grid_proj.srs,
+	dtype=georaster.gdal.GDT_Float64
+	)
+
+
+## Land-and-ice mask
+
+landandice_racmo = masks_ds.topography.where(masks_ds.topography > 1).notnull().values
+# And flatten to a vector which matches the xy (grid coords) array order
+landandice_racmo = landandice_racmo.flatten()
+
+# Interpolate point data onto grid
+zi = interpolate.griddata(xy, landandice_racmo, (xi, yi), method='nearest')
+
+# Write to geotiff
+georaster.simple_write_geotiff(
+	landandice_mask_file,
+	np.flipud(zi), 
+	trans,
+	proj4=grid_proj.srs,
+	dtype=georaster.gdal.GDT_UInt16
+	)
+
+
+
+#############################################################################
+
+## An example runoff file for testing runoff routing
+runoff_195807 = ds.runoff.sel(TIME='1958-07-01').where(mask_gridded == 1)
+runoff_195807 = runoff_195807 * 5*5 / 1.0e6
+georaster.simple_write_geotiff(
+	'/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/racmo_pstere_5km_runoff_1958-07.tif',
+	np.flipud(runoff_195807),
+	trans,
+	proj4=grid_proj.srs,
+	dtype=georaster.gdal.GDT_Float64
+	)
