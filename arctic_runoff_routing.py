@@ -20,7 +20,7 @@ import pandas as pd
 
 import georaster
 
-dem_uri = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/topo_racmo_EPSG3413_5km.tif'
+dem_uri = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/icetopo_racmo_EPSG3413_5km.tif'
 
 ## Step 0: fill pits
 dempits_uri = '/home/at15963/Dropbox/work/papers/bamber_fwf/routing/racmo_EPSG3413_5km_0dempits.tif'
@@ -45,14 +45,16 @@ absorp.save_geotiff(absorp_uri, dtype=georaster.gdal.GDT_UInt16)
 absorp = None
 
 
-## Identify outflux pixels (ICE MASK)
-ice_mask_uri = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/mask_racmo_EPSG3413_5km.tif'
-ice_mask = georaster.SingleBandRaster(ice_mask_uri)
+## Identify outflux pixels (using ice mask)
+# Actually need to outflux to OCEAN pixels, not just onto the adjacent land, will 
+# probably need a couple of combined masks plus logic
+outflux_uri = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/mask_racmo_EPSG3413_5km.tif'
+outflux = georaster.SingleBandRaster(outflux_uri)
 # Grab geo-referencing, for writing out new geoTIFFs
-trans = ice_mask.trans
-proj4 = ice_mask.srs.ExportToProj4()
+trans = outflux.trans
+proj4 = outflux.srs.ExportToProj4()
 # Get distances
-out, distances = morphology.medial_axis(ice_mask.r, return_distance=True)
+out, distances = morphology.medial_axis(outflux.r, return_distance=True)
 out_locations = (distances == 1)
 georaster.simple_write_geotiff(
 	'/media/sf_scratch/distances.tif',
@@ -62,6 +64,13 @@ georaster.simple_write_geotiff(
 	dtype=georaster.gdal.GDT_UInt16
 	)
 
+# Load ice mask in order to mask tundra runoff values
+ice_mask_uri = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/mask_racmo_EPSG3413_5km.tif'
+ice_mask = georaster.SingleBandRaster(ice_mask_uri)
+
+# CHECK (AGAIN) that masks here are capturing all ice runoff
+# make sure that no land topography tweakinng dem values up
+# Check nans versus zeros etc - what impact do they have on flow direction?
 
 ## Step 3: route monthly runoff
 
@@ -73,13 +82,13 @@ n = 0
 for date in pd.date_range('1958-01-01', '1958-12-01', freq='1MS'):
 #for date in runoff.TIME:
 	print(date)
-	r_month = runoff.runoff.sel(TIME=date)
-	r_month = r_month.where(np.flipud(ice_mask.r) == 1)
+	r_month = np.flipud(runoff.runoff.sel(TIME=date).values)
+	r_month = np.where(ice_mask.r == 1, r_month, np.nan)
 	# Convert mmWE to flux per grid cell
 	r_month = r_month * (5*5) / 1.0e6
 	georaster.simple_write_geotiff(
-		'/media/sf_scratch/TMP_runoff_for_month.tif',
-		np.flipud(r_month.values),
+		'/media/sf_scratch/TMP_runoff_for_month_%s.tif' % n,
+		r_month,
 		trans,
 		proj4=proj4,
 		dtype=georaster.gdal.GDT_Float64
@@ -96,9 +105,9 @@ for date in pd.date_range('1958-01-01', '1958-12-01', freq='1MS'):
 
 	# For runoff, could either reference direct into netCDF (potentially tricky)
 	#source_uri = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/racmo_pstere_5km_runoff_1958-07.tif'
-	source_uri = '/media/sf_scratch/TMP_runoff_for_month.tif'
+	source_uri = '/media/sf_scratch/TMP_runoff_for_month_%s.tif' % n
 	loss_uri = '/media/sf_scratch/fwf_routing/loss.tif'
-	flux_uri = '/media/sf_scratch/fwf_routing/flux.tif'
+	flux_uri = '/media/sf_scratch/fwf_routing/flux_month%s.tif' % n
 	routing.route_flux(
 			flowdir_uri, dempits_uri, source_uri, absorp_uri,
 			loss_uri, flux_uri, 'flux_only')
@@ -108,4 +117,6 @@ for date in pd.date_range('1958-01-01', '1958-12-01', freq='1MS'):
 	n += 1
 	# MUST close handle to flux file otherwise pygeoprocessing can't overwrite on next iteration
 	f = None
+
+
 

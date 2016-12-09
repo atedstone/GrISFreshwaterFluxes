@@ -133,7 +133,7 @@ for t in process_times:
 	r = r.flatten()
 
 	# Interpolate point data onto grid
-	zi = interpolate.griddata(xy, r, (xi, yi), method='cubic')
+	zi = interpolate.griddata(xy, r, (xi, yi), method='linear')
 
 	# Apply scale_factor
 	zi_sf = zi / scale_factors
@@ -247,6 +247,7 @@ topo_racmo = topo_racmo.flatten()
 
 # Interpolate point data onto grid
 zi = interpolate.griddata(xy, topo_racmo, (xi, yi), method='linear')
+topo_gridded = zi
 
 # Write to geotiff
 georaster.simple_write_geotiff(
@@ -260,17 +261,10 @@ georaster.simple_write_geotiff(
 
 ## Land-and-ice mask
 
-landandice_racmo = masks_ds.topography.where(masks_ds.topography > 1).notnull().values
-# And flatten to a vector which matches the xy (grid coords) array order
-landandice_racmo = landandice_racmo.flatten()
-
-# Interpolate point data onto grid
-zi = interpolate.griddata(xy, landandice_racmo, (xi, yi), method='nearest')
-
 # Write to geotiff
 georaster.simple_write_geotiff(
 	landandice_mask_file,
-	np.flipud(zi), 
+	np.flipud(np.where(topo_gridded > 22, 1, 0)), 
 	trans,
 	proj4=grid_proj.srs,
 	dtype=georaster.gdal.GDT_UInt16
