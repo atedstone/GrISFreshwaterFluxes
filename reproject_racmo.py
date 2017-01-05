@@ -14,6 +14,7 @@ from scipy import interpolate
 import pandas as pd
 import numpy as np
 from osgeo import osr
+from scipy import ndimage
 
 # obtain from https://github.com/atedstone/georaster
 import georaster
@@ -260,11 +261,18 @@ georaster.simple_write_geotiff(
 
 
 ## Land-and-ice mask
+# Regrid Greenland and other land masses first
+
+landandice = (masks_ds.LSM_noGrIS + masks_ds.Gr_land).values
+landandice = landandice.flatten()
+zi = interpolate.griddata(xy, landandice, (xi, yi), method='nearest')
+landandice_gridded = ndimage.binary_fill_holes(zi)
+
 
 # Write to geotiff
 georaster.simple_write_geotiff(
 	landandice_mask_file,
-	np.flipud(np.where(topo_gridded > 22, 1, 0)), 
+	np.flipud(landandice_gridded),
 	trans,
 	proj4=grid_proj.srs,
 	dtype=georaster.gdal.GDT_UInt16
