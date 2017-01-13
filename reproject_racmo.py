@@ -1,7 +1,11 @@
 """
 Project RACMO 2.3 data onto a regular grid using interpolation.
 Outputs an equivalent NetCDF of the time series.
-Filenames are hard-coded into the script.
+
+Remember to set environment variable PROCESS_DIR
+
+example for polar stereographic full time series:
+reproject_racmo.py /scratch/L0data/RACMO/RACMO2.3_GRN11_runoff_monthly_1958-2015.nc /scratch/L0data/RACMO/RACMO2.3_GRN11_masks.nc 1958-01-01 2015-12-31 
 
 @author Andrew Tedstone a.j.tedstone@bristol.ac.uk
 @created 2016-December-05
@@ -15,20 +19,34 @@ import pandas as pd
 import numpy as np
 from osgeo import osr
 from scipy import ndimage
+import os
+import argparse
 
 # obtain from https://github.com/atedstone/georaster
 import georaster
+
+parser = argparse.ArgumentParser(description='Project geographic RACMO data for Arctic domain')
+
+# Positional arguments
+parser.add_argument('fn_RACMO', type=str, help='str, absolute path to RACMO netCDF file')
+parser.add_argument('fn_RACMO_masks', type=str, help='str, absolute path to RACMO masks netCDF file')
+parser.add_argument('date_start', type=str, help='str, start date of RACMO data in format yyyy-mm-dd')
+parser.add_argument('date_end', type=str, help='str, end date of RACMO data in format yyyy-mm-dd')
+
+parser.add_argument('-grid', type=str, dest='grid', default='pstere', help='str, grid to use, pstere or bamber')
+parser.add_argument('-test', type=bool, dest='test', action='store_true', help='Test script (run only for first year of data)')
+
+args = parser.parse_args()
+
+##############################################################################
 
 # Set grid to 'pstere' or 'bamber'
 # 'bamber' grid is GrIS only, 'pstere' will result in grid across full RACMO extent
 # Use 'bamber' grid only for testing to ensure that interpolation result matches 2012 FWF paper results
 # Characteristics of each grid are hard-coded into logic below
-grid = 'pstere'
+grid = args.grid
 
-# Run interpolation for complete time series (TRUE), or just first year (1958, FALSE)?
-# Use for testing 
-complete_ts = False
-
+PROCESS_DIR = os.environ['PROCESS_DIR']
 
 # ============================================================================
 
@@ -57,15 +75,13 @@ def pstere_lat2k0(lat):
 
 
 ## Determine grid projection
-if grid == 'pstere':
+if args.grid == 'pstere':
 	grid_proj = pyproj.Proj('+init=EPSG:3413')
-	mask_out_file = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/mask_racmo_EPSG3413_5km.tif'
-	ice_topo_out_file = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/icetopo_racmo_EPSG3413_5km.tif'
-	topo_out_file = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/topo_racmo_EPSG3413_5km.tif'
-	landandice_mask_file = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/landandice_racmo_EPSG3413_5km.tif'
-elif grid == 'bamber':
+	fn_mask_ice = PROCESS_DIR + 'mask_ice_racmo_EPSG3413_5km.tif'
+	fn_dem_ice = PROCESS_DIR + 'dem_ice_racmo_EPSG3413_5km.tif'
+	fn_mask_landandice = PROCESS_DIR + 'mask_landandice_racmo_EPSG3413_5km.tif'
+elif args.grid == 'bamber':
 	grid_proj = pyproj.Proj('+proj=sterea +lat_0=90 +lat_ts=71 +lon_0=-39 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs')
-	mask_out_file = '/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/mask_racmo_bamberpstere_5km.tif'
 
 # Create SRS representation
 srs = osr.SpatialReference()
@@ -73,10 +89,11 @@ srs.ImportFromProj4(grid_proj.srs)
 
 
 ## Open RACMO runoff dataset
-runoff = xr.open_dataset('/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/RACMO2.3_GRN11_runoff_monthly_1958-2015.nc',
+# Times aren't encoded in format understandable by xarray
+runoff = xr.open_dataset(args.fn_RACMO,
 		decode_times=False, chunks={'time':15})
 # Apply time dimension in format understandable by xarray
-times = pd.date_range('1958-01-01', '2015-12-01', freq='1MS')
+times = pd.date_range(args.date_start, args.date_end, freq='1MS')
 runoff['time'] = times
 
 
@@ -106,7 +123,6 @@ grid_latlon_radians = grid_latlon / 57.29578
 m = 2.0 * np.tan(45.0 / 57.29578 - (grid_latlon_radians[:, 0] / 2)) / np.cos(grid_latlon_radians[:, 0]) 
 # Compute scale factor for each grid cell
 k0 = pstere_lat2k0(srs.GetProjParm('latitude_of_origin'))
-print('k0 calculated as %.5f' % k0)
 scale_factors = np.sqrt((m * k0))
 # reshape scale_factors to the same dimensions as the grid
 scale_factors = scale_factors.reshape(xi.shape)
@@ -119,10 +135,11 @@ store = np.zeros((len(times), yi.shape[0], yi.shape[1]))
 nt = 0
 
 # Are we just testing the first year or not?
-if complete_ts:
+if not args.test:
 	process_times = times
 else:
-	process_times = pd.date_range('1958-01-01', '1958-12-01', freq='1MS')
+	date_end_here = (dt.strptime(args.date_start, '%Y-%m-%d') + dt.timedelta(days=365).strftime('%Y-%m-%d'))
+	process_times = pd.date_range(args.date_start, date_end_here, freq='1MS')
 
 for t in process_times:
 
@@ -160,9 +177,8 @@ da.attrs['standard_name'] = runoff.runoff.standard_name
 ## Create xarray dataset (for saving to netCDF)
 ds = xr.Dataset({'runoff':da})
 # Include history from RACMO netCDF
-ds.attrs['history'] = runoff.history + ' // This NetCDF generated using bitbucket atedstone/fwf/reproject_racmo.py on RACMO2.3_GRN11_runoff_monthly_1958-2015.nc provided by JLB/BN/MvdB'
+ds.attrs['history'] = runoff.history + ' // This NetCDF generated using bitbucket atedstone/fwf/reproject_racmo.py on %s provided by JLB/BN/MvdB' % args.fn_RACMO
 ds.attrs['author'] = 'Andrew Tedstone a.j.tedstone@bristol.ac.uk'
-ds.attrs['gridding method'] = 'cubic spline scipy.interpolate.griddata'
 # ds.attrs['GeoTransform'] = (xi[0,0], (xi[0,1]-xi[0,0]), 0, yi[-1,0], 0, (yi[-2,0]-yi[-1,0]))
 # ds.attrs['Conventions'] = "CF-1.6"
 
@@ -171,15 +187,18 @@ ds.attrs['gridding method'] = 'cubic spline scipy.interpolate.griddata'
 # ds.Y.attrs['units'] = 'meters'
 # ds.Y.attrs['long_name'] = 'Northings'
 
-ds.to_netcdf('/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/RACMO2.3_GRN11_EPSG3413_runoff_monthly_1958.nc',
-	format='NETCDF4')
+if args.test:
+	fn_save = args.fn_RACMO[:-3] + '_%s_TEST.nc' % args.grid
+else:
+	fn_save = args.fn_RACMO[:-3] + '_%s.nc' % args.grid
+ds.to_netcdf(PROCESS_DIR + fn_save,	format='NETCDF4')
 
 
 
 ##############################################################################
 ## Do some simple checks if projecting the bamber grid (as per used in 2012 paper)
 
-if grid == 'bamber':
+if args.grid == 'bamber':
 	mask = georaster.SingleBandRaster('/media/sf_Data/mc_land_mask___bamber_proj_5km.tif')
 	ice_area = np.where(mask.r == 2, True, False)
 
@@ -198,22 +217,21 @@ print('Projecting mask(s)...')
 trans = (xi[0,0], (xi[0,1]-xi[0,0]), 0, yi[-1,0], 0, (yi[-2,0]-yi[-1,0]))
 
 # Open RACMO masks (they are on same grid)
-masks_ds = xr.open_dataset('/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/RACMO2.3_GRN11_masks.nc')
+masks_ds = xr.open_dataset(args.fn_RACMO_masks)
 
 
 ## Mask of all ice areas; we'll need to split into numerical basins later
-mask_racmo = masks_ds.icecon.values
+mask_ice_pts = masks_ds.icecon.values
 # And flatten to a vector which matches the xy (grid coords) array order
-mask_racmo = mask_racmo.flatten()
+mask_ice_pts = mask_ice_pts.flatten()
 
 # Interpolate point data onto grid
-zi = interpolate.griddata(xy, mask_racmo, (xi, yi), method='nearest')
-mask_gridded = zi
+mask_ice_gridded = interpolate.griddata(xy, mask_ice_pts, (xi, yi), method='nearest')
 
 # Write to geotiff
 georaster.simple_write_geotiff(
-	mask_out_file,
-	np.flipud(zi), 
+	fn_mask_ice,
+	np.flipud(mask_ice_gridded), 
 	trans,
 	proj4=grid_proj.srs,
 	dtype=georaster.gdal.GDT_Byte
@@ -221,39 +239,17 @@ georaster.simple_write_geotiff(
 
 
 ## Ice-only Topography
-ice_topo_racmo = masks_ds.topography.where(masks_ds.icecon == 1).values
+topo_ice_pts = masks_ds.topography.where(masks_ds.icecon == 1).values
 # And flatten to a vector which matches the xy (grid coords) array order
-ice_topo_racmo = ice_topo_racmo.flatten()
+topo_ice_pts = topo_ice_pts.flatten()
 
 # Interpolate point data onto grid
-zi = interpolate.griddata(xy, ice_topo_racmo, (xi, yi), method='linear')
-ice_topo_gridded = zi
+topo_ice_gridded = interpolate.griddata(xy, topo_ice_pts, (xi, yi), method='linear')
 
 # Write to geotiff
 georaster.simple_write_geotiff(
-	ice_topo_out_file,
-	np.flipud(zi), 
-	trans,
-	proj4=grid_proj.srs,
-	dtype=georaster.gdal.GDT_Float64
-	)
-
-
-
-## All topography
-# Set oceans to zero!!
-topo_racmo = masks_ds.topography.where(masks_ds.topography > 1).values
-# And flatten to a vector which matches the xy (grid coords) array order
-topo_racmo = topo_racmo.flatten()
-
-# Interpolate point data onto grid
-zi = interpolate.griddata(xy, topo_racmo, (xi, yi), method='linear')
-topo_gridded = zi
-
-# Write to geotiff
-georaster.simple_write_geotiff(
-	topo_out_file,
-	np.flipud(zi), 
+	fn_dem_ice,
+	np.flipud(topo_ice_gridded), 
 	trans,
 	proj4=grid_proj.srs,
 	dtype=georaster.gdal.GDT_Float64
@@ -261,34 +257,31 @@ georaster.simple_write_geotiff(
 
 
 ## Land-and-ice mask
-# Regrid Greenland and other land masses first
-
-landandice = (masks_ds.LSM_noGrIS + masks_ds.Gr_land).values
-landandice = landandice.flatten()
-zi = interpolate.griddata(xy, landandice, (xi, yi), method='nearest')
-landandice_gridded = ndimage.binary_fill_holes(zi)
-
+mask_landandice_pts = (masks_ds.LSM_noGrIS + masks_ds.Gr_land).values
+mask_landandice_pts = mask_landandice_pts.flatten()
+mask_landandice_gridded = interpolate.griddata(xy, mask_landandice_pts, (xi, yi), method='nearest')
+mask_landandice_gridded = ndimage.binary_fill_holes(mask_landandice_gridded)
 
 # Write to geotiff
 georaster.simple_write_geotiff(
-	landandice_mask_file,
-	np.flipud(landandice_gridded),
+	fn_mask_landandice,
+	np.flipud(mask_landandice_gridded),
 	trans,
 	proj4=grid_proj.srs,
 	dtype=georaster.gdal.GDT_UInt16
 	)
 
-
+print('Finished.')
 
 #############################################################################
 
 ## An example runoff file for testing runoff routing
-runoff_195807 = ds.runoff.sel(TIME='1958-07-01').where(mask_gridded == 1)
-runoff_195807 = runoff_195807 * 5*5 / 1.0e6
-georaster.simple_write_geotiff(
-	'/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/racmo_pstere_5km_runoff_1958-07.tif',
-	np.flipud(runoff_195807),
-	trans,
-	proj4=grid_proj.srs,
-	dtype=georaster.gdal.GDT_Float64
-	)
+# runoff_195807 = ds.runoff.sel(TIME='1958-07-01').where(mask_gridded == 1)
+# runoff_195807 = runoff_195807 * 5*5 / 1.0e6
+# georaster.simple_write_geotiff(
+# 	'/home/at15963/Dropbox/work/papers/bamber_fwf/RACMO/racmo_pstere_5km_runoff_1958-07.tif',
+# 	np.flipud(runoff_195807),
+# 	trans,
+# 	proj4=grid_proj.srs,
+# 	dtype=georaster.gdal.GDT_Float64
+# 	)
