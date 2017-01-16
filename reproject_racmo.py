@@ -21,6 +21,7 @@ from osgeo import osr
 from scipy import ndimage
 import os
 import argparse
+import datetime as dt
 
 # obtain from https://github.com/atedstone/georaster
 import georaster
@@ -34,7 +35,7 @@ parser.add_argument('date_start', type=str, help='str, start date of RACMO data 
 parser.add_argument('date_end', type=str, help='str, end date of RACMO data in format yyyy-mm-dd')
 
 parser.add_argument('-grid', type=str, dest='grid', default='pstere', help='str, grid to use, pstere or bamber')
-parser.add_argument('-test', type=bool, dest='test', action='store_true', help='Test script (run only for first year of data)')
+parser.add_argument('-test', dest='test', action='store_true', help='Test script (run only for first year of data)')
 
 args = parser.parse_args()
 
@@ -129,17 +130,18 @@ scale_factors = scale_factors.reshape(xi.shape)
 
 
 ## Begin the interpolation/projection
-# Set up store in which to hold projected (gridded) data
-store = np.zeros((len(times), yi.shape[0], yi.shape[1]))
-# Integer time counter for indexing to np store array
-nt = 0
 
 # Are we just testing the first year or not?
 if not args.test:
 	process_times = times
 else:
-	date_end_here = (dt.strptime(args.date_start, '%Y-%m-%d') + dt.timedelta(days=365).strftime('%Y-%m-%d'))
+	date_end_here = (dt.datetime.strptime(args.date_start, '%Y-%m-%d') + dt.timedelta(days=364)).strftime('%Y-%m-%d')
 	process_times = pd.date_range(args.date_start, date_end_here, freq='1MS')
+
+# Set up store in which to hold projected (gridded) data
+store = np.zeros((len(process_times), yi.shape[0], yi.shape[1]))
+# Integer time counter for indexing to np store array
+nt = 0
 
 for t in process_times:
 
@@ -165,8 +167,9 @@ for t in process_times:
 
 ## Create xarray data array
 # Coordinates of the data, for xarray representation
-coords = {'TIME': times, 'Y': yi[:,0], 'X': xi[0,:]}
-da = xr.DataArray(store, coords=coords, dims=['TIME', 'Y', 'X'])
+coords = {'TIME': process_times, 'Y': yi[:,0], 'X': xi[0,:]}
+da = xr.DataArray(store, coords=coords, dims=['TIME', 'Y', 'X'], 
+	encoding={'dtype':np.dtype('Float32')})
 # Set attributes from RACMO netCDF
 da.name = runoff.runoff.long_name
 da.attrs['long_name'] = runoff.runoff.long_name
@@ -177,20 +180,36 @@ da.attrs['standard_name'] = runoff.runoff.standard_name
 ## Create xarray dataset (for saving to netCDF)
 ds = xr.Dataset({'runoff':da})
 # Include history from RACMO netCDF
+ds.attrs['Conventions'] = "CF-1.4"
 ds.attrs['history'] = runoff.history + ' // This NetCDF generated using bitbucket atedstone/fwf/reproject_racmo.py on %s provided by JLB/BN/MvdB' % args.fn_RACMO
-ds.attrs['author'] = 'Andrew Tedstone a.j.tedstone@bristol.ac.uk'
-# ds.attrs['GeoTransform'] = (xi[0,0], (xi[0,1]-xi[0,0]), 0, yi[-1,0], 0, (yi[-2,0]-yi[-1,0]))
-# ds.attrs['Conventions'] = "CF-1.6"
+ds.attrs['institution'] = 'University of Bristol (Andrew Tedstone), IMAU (Brice Noel)'
+ds.attrs['title'] = 'Monthly runoff in the RACMO 2.3 domain on a projected grid'
 
-# ds.X.attrs['units'] = 'meters'
-# ds.X.attrs['long_name'] = 'Eastings'
-# ds.Y.attrs['units'] = 'meters'
-# ds.Y.attrs['long_name'] = 'Northings'
+ds.attrs['nx'] = xi.shape[1]
+ds.attrs['ny'] = yi.shape[0]
+ds.attrs['proj4'] = srs.ExportToProj4()
+ds.attrs['xmin'] = np.min(xi)
+ds.attrs['ymax'] = np.max(yi)
+ds.attrs['spacing'] = 5000
+
+# mass conservation has variable 'polar_stereographic' with variable int8 -127
+# obviously no time in bedmachine
+
+ds.X.attrs['units'] = 'meters'
+ds.X.attrs['standard_name'] = 'Eastings'
+ds.X.attrs['coordinates'] = 'X'
+ds.Y.attrs['units'] = 'meters'
+ds.Y.attrs['standard_name'] = 'Northings'
+ds.Y.attrs['coordinates'] = 'Y'
+ds.TIME.attrs['coordinates'] = 'TIME'
+
+# ds.attrs['GeoTransform'] = (xi[0,0], (xi[0,1]-xi[0,0]), 0, yi[-1,0], 0, (yi[-2,0]-yi[-1,0]))
 
 if args.test:
-	fn_save = args.fn_RACMO[:-3] + '_%s_TEST.nc' % args.grid
+	fn_save = args.fn_RACMO.split('/')[-1][:-3] + '_%s_TEST.nc' % args.grid
 else:
-	fn_save = args.fn_RACMO[:-3] + '_%s.nc' % args.grid
+	fn_save = args.fn_RACMO.split('/')[-1][:-3] + '_%s.nc' % args.grid
+print(PROCESS_DIR + fn_save)
 ds.to_netcdf(PROCESS_DIR + fn_save,	format='NETCDF4')
 
 
