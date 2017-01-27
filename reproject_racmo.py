@@ -79,6 +79,7 @@ def pstere_lat2k0(lat):
 if args.grid == 'pstere':
 	grid_proj = pyproj.Proj('+init=EPSG:3413')
 	fn_mask_ice = PROCESS_DIR + 'mask_ice_racmo_EPSG3413_5km.tif'
+	fn_mask_land = PROCESS_DIR + 'mask_land_racmo_EPSG3413_5km.tif'
 	fn_dem_ice = PROCESS_DIR + 'dem_ice_racmo_EPSG3413_5km.tif'
 	fn_mask_landandice = PROCESS_DIR + 'mask_landandice_racmo_EPSG3413_5km.tif'
 elif args.grid == 'bamber':
@@ -285,6 +286,21 @@ mask_landandice_gridded = ndimage.binary_fill_holes(mask_landandice_gridded)
 georaster.simple_write_geotiff(
 	fn_mask_landandice,
 	np.flipud(mask_landandice_gridded),
+	trans,
+	proj4=grid_proj.srs,
+	dtype=georaster.gdal.GDT_UInt16
+	)
+
+
+## Land-only mask
+mask_land_pts = ((masks_ds.LSM_noGrIS + masks_ds.Gr_land) - (masks_ds.icecon == 1)).values
+mask_land_pts = mask_land_pts.flatten()
+mask_land_gridded = interpolate.griddata(xy, mask_land_pts, (xi, yi), method='nearest')
+
+# Write to geotiff
+georaster.simple_write_geotiff(
+	fn_mask_land,
+	np.flipud(mask_land_gridded),
 	trans,
 	proj4=grid_proj.srs,
 	dtype=georaster.gdal.GDT_UInt16
