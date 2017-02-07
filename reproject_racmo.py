@@ -80,6 +80,7 @@ if args.grid == 'pstere':
 	grid_proj = pyproj.Proj('+init=EPSG:3413')
 	fn_mask_ice = PROCESS_DIR + 'mask_ice_racmo_EPSG3413_5km.tif'
 	fn_mask_land = PROCESS_DIR + 'mask_land_racmo_EPSG3413_5km.tif'
+	fn_mask_greenland = PROCESS_DIR + 'mask_greenland_racmo_EPSG3413_5km.tif'
 	fn_dem_ice = PROCESS_DIR + 'dem_ice_racmo_EPSG3413_5km.tif'
 	fn_mask_landandice = PROCESS_DIR + 'mask_landandice_racmo_EPSG3413_5km.tif'
 elif args.grid == 'bamber':
@@ -301,6 +302,22 @@ mask_land_gridded = interpolate.griddata(xy, mask_land_pts, (xi, yi), method='ne
 georaster.simple_write_geotiff(
 	fn_mask_land,
 	np.flipud(mask_land_gridded),
+	trans,
+	proj4=grid_proj.srs,
+	dtype=georaster.gdal.GDT_UInt16
+	)
+
+
+
+## Greenland land+ice
+greenland_pts = masks_ds.Gr_land.values
+greenland_pts = greenland_pts.flatten()
+greenland_gridded = interpolate.griddata(xy, greenland_pts, (xi, yi), method='nearest')
+
+# Write to geotiff
+georaster.simple_write_geotiff(
+	fn_mask_greenland,
+	np.flipud(greenland_gridded),
 	trans,
 	proj4=grid_proj.srs,
 	dtype=georaster.gdal.GDT_UInt16
