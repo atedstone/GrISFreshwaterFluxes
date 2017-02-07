@@ -95,7 +95,6 @@ trans = landice_mask.trans
 proj4 = landice_mask.srs.ExportToProj4()
 # Get distances
 out, distances = morphology.medial_axis(landice_mask.r, return_distance=True)
-out_locations = (distances == 1)
 georaster.simple_write_geotiff(
 	PROCESS_DIR + 'ROUTING_distances_landandice.tif',
 	distances,
@@ -130,15 +129,15 @@ tree = spatial.cKDTree(coast_points)
 # Essentially 'Distance from land'
 ice_dist = georaster.SingleBandRaster(PROCESS_DIR + 'ROUTING_distances_ice.tif')
 # Need to flip in order to get origins correct wrt new grid being created below
-ice_dist.r = np.flipud(ice_dist.r)
+# ice_dist.r = np.flipud(ice_dist.r)
 ice = np.where(ice_dist.r == 1, 1, 0)
 
 # In pixel space, create a 2-d array of ice margin pixels
 x = np.arange(0, ice_dist.nx)
 y = np.arange(0, ice_dist.ny)
 xi, yi = np.meshgrid(x, y)
-xp = xi[np.where(ice == 1, True, False)].flatten()
-yp = yi[np.where(ice == 1, True, False)].flatten()
+xp = xi[ice == 1].flatten()
+yp = yi[ice == 1].flatten()
 ice_points = np.zeros((len(xp), 2))
 ice_points[:, 0] = yp
 ice_points[:, 1] = xp
@@ -151,8 +150,8 @@ land_mask = georaster.SingleBandRaster(land_mask_uri)
 x = np.arange(0, land_mask.nx)
 y = np.arange(0, land_mask.ny)
 xi, yi = np.meshgrid(x, y)
-xp = xi[np.where(land_mask.r == 1, True, False)].flatten()
-yp = yi[np.where(land_mask.r == 1, True, False)].flatten()
+xp = xi[land_mask.r == 1].flatten()
+yp = yi[land_mask.r == 1].flatten()
 land_points = np.zeros((len(xp), 2))
 land_points[:, 0] = yp
 land_points[:, 1] = xp
@@ -209,7 +208,7 @@ for date in dates:
 		coast_grid_ice[cpy, cpx] += flux.r[ry, rx]
 
 	# Save coastal fluxes to store
-	store_ice[n,:,:] = coast_grid_ice
+	store_ice[n,:,:] = np.flipud(coast_grid_ice)
 
 	# MUST close handle to flux file otherwise pygeoprocessing can't overwrite on next iteration
 	f = None
@@ -217,7 +216,7 @@ for date in dates:
 
 	## Route tundra fluxes too ...
 	# Just do by euclidean distance
-	r_month_tundra = np.where(land_mask == 1, r_month, np.nan)
+	r_month_tundra = np.where(land_mask.r == 1, r_month, np.nan)
 	coast_grid_tundra = np.zeros((dist_land.ny, dist_land.nx))
 	for ry, rx in land_points:
 		distance, index = tree.query((ry, rx), k=1)
