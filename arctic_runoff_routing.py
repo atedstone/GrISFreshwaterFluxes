@@ -9,8 +9,6 @@ pygeoprocessing toolbox.
 Water is moved from the margin to the coast along the euclidean distance, 
 determined using a KD-tree.
 
-TO DO: implement saving the fluxes to disk.
-
 @author Andrew Tedstone a.j.tedstone@bristol.ac.uk
 @created 2016-December-08
 
@@ -23,6 +21,7 @@ import xarray as xr
 import pandas as pd
 from scipy import spatial 
 import os
+from osgeo import gdal
 
 import georaster
 
@@ -65,7 +64,7 @@ absorp_uri = PROCESS_DIR + 'ROUTING_racmo_EPSG3413_5km_absorp.tif'
 absorp = georaster.SingleBandRaster(accum_uri)
 zeros = np.zeros(absorp.r.shape)
 absorp.r = zeros
-absorp.save_geotiff(absorp_uri, dtype=georaster.gdal.GDT_UInt16)
+absorp.save_geotiff(absorp_uri, dtype=gdal.GDT_UInt16)
 absorp = None
 
 
@@ -83,7 +82,7 @@ georaster.simple_write_geotiff(
 	distances,
 	trans, 
 	proj4=proj4,
-	dtype=georaster.gdal.GDT_UInt16
+	dtype=gdal.GDT_UInt16
 	)
 
 
@@ -100,7 +99,7 @@ georaster.simple_write_geotiff(
 	distances,
 	trans, 
 	proj4=proj4,
-	dtype=georaster.gdal.GDT_UInt16
+	dtype=gdal.GDT_UInt16
 	)
 
 
@@ -161,9 +160,9 @@ land_points[:, 1] = xp
 runoff = xr.open_dataset(PROCESS_DIR + 'RACMO2.3_GRN11_runoff_monthly_1958-2015_pstere.nc')
 
 if debug == True:
-	store_ice = np.zeros((12, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
-	store_tundra = np.zeros((12, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
-	dates = pd.date_range('1958-01-01', '1958-12-01', freq='1MS')
+	store_ice = np.zeros((12*7, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
+	store_tundra = np.zeros((12*7, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
+	dates = pd.date_range('1958-01-01', '1964-12-01', freq='1MS')
 else:
 	dates = runoff.TIME
 	store_ice = np.zeros((len(dates), ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
@@ -178,13 +177,14 @@ for date in dates:
 	r_month = np.where(r_month > 0, r_month * (5*5) / 1.0e6, 0)
 	# Get ice component of runoff
 	r_month_ice = np.where(ice_mask.r == 1, r_month, np.nan)
+	print('Ice runoff pre-routing: %s' % np.nansum(r_month_ice))
 	# Save to a geoTIFF so that the routing toolbox can ingest it
 	georaster.simple_write_geotiff(
 		PROCESS_DIR + 'TMP_runoff_for_month_%s.tif' % n,
 		r_month_ice,
 		trans,
 		proj4=proj4,
-		dtype=georaster.gdal.GDT_Float64
+		dtype=gdal.GDT_Float32
 		)
 
 	# Route the runoff to the ice margins
@@ -201,11 +201,13 @@ for date in dates:
 	# Assign the runoff from each ice margin pixel to its nearest coastal pixel.
 	# Uses the look-up tree that we created above.
 	# Create the grid to save the coastal outflux values to
+	print('Ice routed to sheet margin but before coast routing: %s' % np.nansum(flux.r[ice == 1]))
 	coast_grid_ice = np.zeros((dist_land.ny, dist_land.nx))
 	for ry, rx in ice_points:
 		distance, index = tree.query((ry, rx), k=1)
 		cpy, cpx = coast_points[index, :]
 		coast_grid_ice[cpy, cpx] += flux.r[ry, rx]
+	print('Ice, routed to coast: %s' % np.sum(coast_grid_ice))		
 
 	# Save coastal fluxes to store
 	store_ice[n,:,:] = np.flipud(coast_grid_ice)
@@ -228,8 +230,19 @@ for date in dates:
 
 	n += 1
 
+
+"""
+Masks to include in this product:
+* Greenland              >
+* Canadian High Arctic   > Could produce single combined mask with numbers for each area
+* Svalbard               >
+* Iceland                >
+
+* Ocean basins
+"""
+
 coords = {'TIME':dates, 'Y':runoff.Y, 'X':runoff.X}
-routed_runoff_ice = xr.DataArray(store_ice, coords=coords, dims=['TIME', 'Y', 'X'], encoding={'dtype':np.dtype('Float64')})
-routed_runoff_tundra = xr.DataArray(store_tundra, coords=coords, dims=['TIME', 'Y', 'X'], encoding={'dtype':np.dtype('Float64')})
+routed_runoff_ice = xr.DataArray(store_ice, coords=coords, dims=['TIME', 'Y', 'X'], encoding={'dtype':np.dtype('Float32')})
+routed_runoff_tundra = xr.DataArray(store_tundra, coords=coords, dims=['TIME', 'Y', 'X'], encoding={'dtype':np.dtype('Float32')})
 ds = xr.Dataset({'runoff_ice':routed_runoff_ice, 'runoff_tundra':routed_runoff_tundra})
-ds.to_netcdf('/home/at15963/Dropbox/routed_1958_2015.nc', format='NetCDF4')
+ds.to_netcdf('/home/at15963/Dropbox/routed_1958_1963.nc', format='NetCDF4')
