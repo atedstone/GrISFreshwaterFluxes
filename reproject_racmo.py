@@ -17,7 +17,7 @@ import pyproj
 from scipy import interpolate
 import pandas as pd
 import numpy as np
-from osgeo import osr
+from osgeo import osr, gdal
 from scipy import ndimage
 import os
 import argparse
@@ -225,7 +225,7 @@ if args.grid == 'bamber':
 
 	# Bamber's value for gridded product stated as 242.888 km^3 in Interpolate_racmo.BAK
 	print('1958 runoff flux:')
-	print(((ds.runoff.sel(TIME=slice('1959-01-01','1959-09-01')) * ice_area) * (5*5) / 1.0e6).sum())
+	print(((ds.runoff.sel(TIME=slice('1958-01-01','1958-09-01')) * ice_area) * (5*5) / 1.0e6).sum())
 
 
 
@@ -236,6 +236,9 @@ print('Projecting mask(s)...')
 
 # Set geoTransform for writing to geotiff
 trans = (xi[0,0], (xi[0,1]-xi[0,0]), 0, yi[-1,0], 0, (yi[-2,0]-yi[-1,0]))
+
+# Set up coords for saving to netcdf
+masks_coords = {'Y': yi[:,0], 'X': xi[0,:]}
 
 # Open RACMO masks (they are on same grid)
 masks_ds = xr.open_dataset(args.fn_RACMO_masks)
@@ -255,8 +258,9 @@ georaster.simple_write_geotiff(
 	np.flipud(mask_ice_gridded), 
 	trans,
 	proj4=grid_proj.srs,
-	dtype=georaster.gdal.GDT_Byte
+	dtype=gdal.GDT_Byte
 	)
+xr_mask_ice = xr.DataArray(mask_ice_gridded, dims=('Y', 'X'), coords=masks_coords)
 
 
 ## Ice-only Topography
@@ -273,8 +277,9 @@ georaster.simple_write_geotiff(
 	np.flipud(topo_ice_gridded), 
 	trans,
 	proj4=grid_proj.srs,
-	dtype=georaster.gdal.GDT_Float64
+	dtype=gdal.GDT_Float64
 	)
+xr_topo_ice = xr.DataArray(topo_ice_gridded, dims=['Y','X'], coords=masks_coords, encoding={'dtype':np.dtype('Float32')})
 
 
 ## Land-and-ice mask
@@ -289,8 +294,9 @@ georaster.simple_write_geotiff(
 	np.flipud(mask_landandice_gridded),
 	trans,
 	proj4=grid_proj.srs,
-	dtype=georaster.gdal.GDT_UInt16
+	dtype=gdal.GDT_UInt16
 	)
+xr_mask_landandice = xr.DataArray(mask_landandice_gridded, dims=['Y','X'], coords=masks_coords)
 
 
 ## Land-only mask
@@ -304,26 +310,79 @@ georaster.simple_write_geotiff(
 	np.flipud(mask_land_gridded),
 	trans,
 	proj4=grid_proj.srs,
-	dtype=georaster.gdal.GDT_UInt16
+	dtype=gdal.GDT_UInt16
 	)
-
+xr_mask_land = xr.DataArray(mask_land_gridded, dims=['Y','X'], coords=masks_coords)
 
 
 ## Greenland land+ice
 greenland_pts = masks_ds.Gr_land.values
 greenland_pts = greenland_pts.flatten()
 greenland_gridded = interpolate.griddata(xy, greenland_pts, (xi, yi), method='nearest')
-
+greenland_gridded = np.where(greenland_gridded > 0, 1, 0)
 # Write to geotiff
 georaster.simple_write_geotiff(
 	fn_mask_greenland,
 	np.flipud(greenland_gridded),
 	trans,
 	proj4=grid_proj.srs,
-	dtype=georaster.gdal.GDT_UInt16
+	dtype=gdal.GDT_UInt16
 	)
+xr_mask_greenland = xr.DataArray(greenland_gridded, dims=['Y','X'], coords=masks_coords)
+
+
+
+## The others for netcdf only
+icemask_noGrIS = masks_ds.icemask_no_GrIS.values
+icemask_noGrIS_gridded = interpolate.griddata(xy, icemask_noGrIS.flatten(), (xi, yi), method='nearest')
+xr_mask_icemask_noGrIS = xr.DataArray(icemask_noGrIS_gridded, dims=['Y','X'], coords=masks_coords)
+
+LSM_noGrIS = masks_ds.LSM_noGrIS.values
+LSM_noGrIS_gridded = interpolate.griddata(xy, LSM_noGrIS.flatten(), (xi, yi), method='nearest')
+xr_mask_LSM_noGrIS = xr.DataArray(LSM_noGrIS_gridded, dims=['Y','X'], coords=masks_coords)
+
+Gr_land = masks_ds.Gr_land.values
+Gr_land_gridded = interpolate.griddata(xy, Gr_land.flatten(), (xi, yi), method='nearest')
+xr_mask_Gr_land = xr.DataArray(Gr_land_gridded, dims=['Y','X'], coords=masks_coords)
+
+GrIS_mask = masks_ds.GrIS_mask.values
+GrIS_mask_gridded = interpolate.griddata(xy, GrIS_mask.flatten(), (xi, yi), method='nearest')
+xr_mask_GrIS_mask = xr.DataArray(GrIS_mask_gridded, dims=['Y','X'], coords=masks_coords)
+
+GrIS_caps_mask = masks_ds.GrIS_caps_mask.values
+GrIS_caps_mask_gridded = interpolate.griddata(xy, GrIS_caps_mask.flatten(), (xi, yi), method='nearest')
+xr_mask_GrIS_caps_mask = xr.DataArray(GrIS_caps_mask_gridded, dims=['Y','X'], coords=masks_coords)
+
+## Also put them all into a netCDF
+new_ds_masks = xr.Dataset({
+	'LSM_noGrIS':xr_mask_LSM_noGrIS,
+	'icemask_no_GrIS':xr_mask_icemask_noGrIS,
+	'Gr_land':xr_mask_Gr_land,
+	'GrIS_mask':xr_mask_GrIS_mask,
+	'GrIS_caps_mask':xr_mask_GrIS_caps_mask,
+	'Greenland_all':xr_mask_greenland,
+	'all_land_no_ice':xr_mask_land,
+	'landandice':xr_mask_landandice,
+	'all_ice':xr_mask_ice,
+	'ice_topo':xr_topo_ice
+	})
+
+fn_save = args.fn_RACMO_masks.split('/')[-1][:-3] + '_%s.nc' % args.grid
+new_ds_masks.to_netcdf(PROCESS_DIR + fn_save)
+
 
 print('Finished.')
+
+
+"""
+Code to plot all masks:
+
+for i in masks.variables:
+	print(i)
+	if i in ('X','Y'): continue
+	figure(),masks[i].plot(),title(i)
+
+"""
 
 #############################################################################
 
@@ -335,5 +394,5 @@ print('Finished.')
 # 	np.flipud(runoff_195807),
 # 	trans,
 # 	proj4=grid_proj.srs,
-# 	dtype=georaster.gdal.GDT_Float64
+# 	dtype=gdal.GDT_Float64
 # 	)
