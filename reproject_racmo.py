@@ -2,7 +2,7 @@
 Project RACMO 2.3 data onto a regular grid using interpolation.
 Outputs an equivalent NetCDF of the time series.
 
-Remember to set environment variable PROCESS_DIR
+Remember to set environment variable PROCESS_DIR, with trailing slash
 
 example for polar stereographic full time series:
 reproject_racmo.py /scratch/L0data/RACMO/RACMO2.3_GRN11_runoff_monthly_1958-2015.nc /scratch/L0data/RACMO/RACMO2.3_GRN11_masks.nc 1958-01-01 2015-12-31 
@@ -22,8 +22,7 @@ from scipy import ndimage
 import os
 import argparse
 import datetime as dt
-
-# obtain from https://github.com/atedstone/georaster
+import math
 import georaster
 
 parser = argparse.ArgumentParser(description='Project geographic RACMO data for Arctic domain')
@@ -76,6 +75,7 @@ def pstere_lat2k0(lat):
 
 
 ## Determine grid projection
+# 5 km grid is hard-coded
 if args.grid == 'pstere':
 	grid_proj = pyproj.Proj('+init=EPSG:3413')
 	fn_mask_ice = PROCESS_DIR + 'mask_ice_racmo_EPSG3413_5km.tif'
@@ -107,10 +107,15 @@ latlon = np.vstack((lat, lon)).T
 (x, y) = grid_proj(lon, lat)
 xy = np.vstack((x, y)).T
 
+def grid_ceil(n):
+	return math.ceil(n / 10000) * 10000
+
+def grid_floor(n):
+	return math.floor(n / 10000) * 10000
 
 ## Create grid at 5 km resolution
 if grid == 'pstere':
-	yi, xi = np.mgrid[np.min(y):np.max(y):5000, np.min(x):np.max(x):5000]
+	yi, xi = np.mgrid[grid_floor(np.min(y)):grid_ceil(np.max(y)):5000, grid_floor(np.min(x)):grid_ceil(np.max(x)):5000]
 elif grid == 'bamber':
 	yi, xi = np.mgrid[-3400000:-600000:5000, -800000:700000:5000]
 
@@ -130,6 +135,9 @@ scale_factors = np.sqrt((m * k0))
 # reshape scale_factors to the same dimensions as the grid
 scale_factors = scale_factors.reshape(xi.shape)
 
+# Create lat/lon variables of projected grid
+grid_lon_2d = grid_lon.reshape(xi.shape)
+grid_lat_2d = grid_lat.reshape(yi.shape)
 
 ## Begin the interpolation/projection
 
@@ -145,6 +153,7 @@ store = np.zeros((len(process_times), yi.shape[0], yi.shape[1]))
 # Integer time counter for indexing to np store array
 nt = 0
 
+# Do the projection to grid
 for t in process_times:
 
 	print(t.strftime('%Y-%m'))
@@ -170,43 +179,85 @@ for t in process_times:
 ## Create xarray data array
 # Coordinates of the data, for xarray representation
 coords = {'TIME': process_times, 'Y': yi[:,0], 'X': xi[0,:]}
-da = xr.DataArray(store, coords=coords, dims=['TIME', 'Y', 'X'], 
-	encoding={'dtype':np.dtype('Float32')})
+# Projected runoff data
+da = xr.DataArray(store, coords=coords, 
+	dims=['TIME', 'Y', 'X'], encoding={'dtype':np.dtype('Float32')})
+
 # Set attributes from RACMO netCDF
 da.name = runoff.runoff.long_name
 da.attrs['long_name'] = runoff.runoff.long_name
 da.attrs['units'] = runoff.runoff.units
 da.attrs['standard_name'] = runoff.runoff.standard_name
+da.attrs['grid_mapping'] = 'polar_stereographic'
 
 
-## Create xarray dataset (for saving to netCDF)
-ds = xr.Dataset({'runoff':da})
-# Include history from RACMO netCDF
-ds.attrs['Conventions'] = "CF-1.4"
-ds.attrs['history'] = runoff.history + ' // This NetCDF generated using bitbucket atedstone/fwf/reproject_racmo.py on %s provided by JLB/BN/MvdB' % args.fn_RACMO
+## Create associated lat/lon coordinates DataArrays
+coords_geo = {'Y': yi[:,0], 'X': xi[0,:]}
+
+lon_da = xr.DataArray(grid_lon_2d, coords=coords_geo, dims=['Y', 'X'], 
+	encoding={'_FillValue': -9999.})
+lon_da.attrs['grid_mapping'] = 'polar_stereographic'
+lon_da.attrs['units'] = 'degrees'
+lon_da.attrs['standard_name'] = 'longitude'
+
+lat_da = xr.DataArray(grid_lat_2d, coords=coords_geo, dims=['Y', 'X'], 
+	encoding={'_FillValue': -9999.})
+lat_da.attrs['grid_mapping'] = 'polar_stereographic'
+lat_da.attrs['units'] = 'degrees'
+lat_da.attrs['standard_name'] = 'latitude'
+
+
+## Define projection
+crs = xr.DataArray(0, encoding={'dtype':np.dtype('int8')})
+crs.attrs['grid_mapping_name'] = 'polar_stereographic'
+crs.attrs['scale_factor_at_central_origin'] = srs.GetProjParm('scale_factor')
+crs.attrs['standard_parallel'] = srs.GetProjParm('latitude_of_origin')
+crs.attrs['straight_vertical_longitude_from_pole'] = srs.GetProjParm('central_meridian')
+crs.attrs['false_easting'] = srs.GetProjParm('false_easting')
+crs.attrs['false_northing'] = srs.GetProjParm('false_northing')
+# lat_0 does not have a WKT representation for polar stereographic
+# http://cfconventions.org/wkt-proj-4.html
+# look it up from Proj4 string directly instead
+p4 = srs.ExportToProj4()
+lat_0_pos = p4.find('+lat_0=')
+lat_0 = float(p4[lat_0_pos+7:lat_0_pos+7+3].strip())
+crs.attrs['latitude_of_projection_origin'] = lat_0
+
+
+## Create the Dataset
+ds = xr.Dataset({'runoff':da, 'lon': lon_da, 'lat': lat_da, 'polar_stereographic':crs})
+
+# Main metadata
+ds.attrs['Conventions'] = 'CF-1.4'
+ds.attrs['history'] = 'This NetCDF generated using bitbucket atedstone/fwf/reproject_racmo.py on %s provided by JLB/BN/MvdB\n %s' %(args.fn_RACMO, runoff.history)
 ds.attrs['institution'] = 'University of Bristol (Andrew Tedstone), IMAU (Brice Noel)'
 ds.attrs['title'] = 'Monthly runoff in the RACMO 2.3 domain on a projected grid'
+ds.attrs['source'] = 'RACMO 2.3'
+ds.attrs['proj4'] = grid_proj.srs
 
-ds.attrs['nx'] = xi.shape[1]
-ds.attrs['ny'] = yi.shape[0]
-ds.attrs['proj4'] = srs.ExportToProj4()
-ds.attrs['xmin'] = np.min(xi)
-ds.attrs['ymax'] = np.max(yi)
-ds.attrs['spacing'] = 5000
+# Additional geo-referencing
+ds.attrs['nx'] = float(xi.shape[1])
+ds.attrs['ny'] = float(yi.shape[0])
+ds.attrs['xmin'] = float(np.round(np.min(xi), 0))
+ds.attrs['ymax'] = float(np.round(np.max(yi), 0))
+ds.attrs['spacing'] = 5000.
 
-# mass conservation has variable 'polar_stereographic' with variable int8 -127
-# obviously no time in bedmachine
-
+# NC conventions metadata for dimensions variables
 ds.X.attrs['units'] = 'meters'
-ds.X.attrs['standard_name'] = 'Eastings'
-ds.X.attrs['coordinates'] = 'X'
+ds.X.attrs['standard_name'] = 'projection_x_coordinate'
+ds.X.attrs['point_spacing'] = 'even'
+ds.X.attrs['axis'] = 'X'
+
 ds.Y.attrs['units'] = 'meters'
-ds.Y.attrs['standard_name'] = 'Northings'
-ds.Y.attrs['coordinates'] = 'Y'
-ds.TIME.attrs['coordinates'] = 'TIME'
+ds.Y.attrs['standard_name'] = 'projection_y_coordinate'
+ds.Y.attrs['point_spacing'] = 'even'
+ds.Y.attrs['axis'] = 'Y'
 
-# ds.attrs['GeoTransform'] = (xi[0,0], (xi[0,1]-xi[0,0]), 0, yi[-1,0], 0, (yi[-2,0]-yi[-1,0]))
+ds.TIME.attrs['standard_name'] = 'time'
+ds.TIME.attrs['axis'] = 'TIME'
 
+
+## Save the Dataset as a NetCDF file
 if args.test:
 	fn_save = args.fn_RACMO.split('/')[-1][:-3] + '_%s_TEST.nc' % args.grid
 else:
@@ -220,12 +271,14 @@ ds.to_netcdf(PROCESS_DIR + fn_save,	format='NETCDF4')
 ## Do some simple checks if projecting the bamber grid (as per used in 2012 paper)
 
 if args.grid == 'bamber':
-	mask = georaster.SingleBandRaster('/media/sf_Data/mc_land_mask___bamber_proj_5km.tif')
+	# To create this file, use Williams mc_land_mask___bamber_proj.tif:
+	# gdalwarp -tr 5000 5000 -te -800000 -3400000 700000 -600000 mc_land_mask___bamber_proj.tif mc_land_mask___bamber_proj_5km.tif
+	mask = georaster.SingleBandRaster('/scratch/bedmachine/mc_land_mask___bamber_proj_5km.tif')
 	ice_area = np.where(mask.r == 2, True, False)
 
 	# Bamber's value for gridded product stated as 242.888 km^3 in Interpolate_racmo.BAK
 	print('1958 runoff flux:')
-	print(((ds.runoff.sel(TIME=slice('1958-01-01','1958-09-01')) * ice_area) * (5*5) / 1.0e6).sum())
+	print(((ds.runoff.sel(TIME=slice('1958-01-01','1958-12-01')) * np.flipud(ice_area)) * (5*5) / 1.0e6).sum())
 
 
 
