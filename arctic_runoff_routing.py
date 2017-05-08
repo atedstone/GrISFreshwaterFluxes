@@ -26,7 +26,7 @@ from osgeo import gdal
 import georaster
 
 # If true, only process 1958
-debug = True
+debug = False
 
 PROCESS_DIR = os.environ['PROCESS_DIR']
 
@@ -127,11 +127,21 @@ tree = spatial.cKDTree(coast_points)
 ## Find the ice sheet margins
 # Essentially 'Distance from land'
 ice_dist = georaster.SingleBandRaster(PROCESS_DIR + 'ROUTING_distances_ice.tif')
-# Need to flip in order to get origins correct wrt new grid being created below
-# ice_dist.r = np.flipud(ice_dist.r)
 ice = np.where(ice_dist.r == 1, 1, 0)
 
-# In pixel space, create a 2-d array of ice margin pixels
+## Create DEM with ice margin elevations set to zero
+# for mass conservation
+dempits = georaster.SingleBandRaster(dempits_uri)
+ice_dem_zeros = np.where(ice, 0, dempits.r)
+georaster.simple_write_geotiff(
+	PROCESS_DIR + 'ROUTING_dempits_zeromargins.tif',
+	ice_dem_zeros,
+	trans, 
+	proj4=proj4,
+	dtype=gdal.GDT_UInt16
+	)
+
+## In pixel space, create a 2-d array of ice margin pixels
 x = np.arange(0, ice_dist.nx)
 y = np.arange(0, ice_dist.ny)
 xi, yi = np.meshgrid(x, y)
@@ -141,11 +151,9 @@ ice_points = np.zeros((len(xp), 2))
 ice_points[:, 0] = yp
 ice_points[:, 1] = xp
 
-# Load land mask to route tundra runoff
+## Load land mask to route tundra runoff (euclidean distance)
 land_mask_uri = PROCESS_DIR + 'mask_land_racmo_EPSG3413_5km.tif'
 land_mask = georaster.SingleBandRaster(land_mask_uri)
-# Need to flip in order to get origins correct wrt new grid being created below
-# Make a list of all land points to route from
 x = np.arange(0, land_mask.nx)
 y = np.arange(0, land_mask.ny)
 xi, yi = np.meshgrid(x, y)
@@ -164,11 +172,13 @@ if debug == True:
 	store_tundra = np.zeros((12*7, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
 	dates = pd.date_range('1958-01-01', '1964-12-01', freq='1MS')
 else:
-	dates = runoff.TIME
+	dates = runoff.TIME.to_index()
 	store_ice = np.zeros((len(dates), ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
 	store_tundra = np.zeros((len(dates), ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
 
 n = 0
+ice_r_pre = []
+ice_r_post = []
 for date in dates:
 	print(date)
 	# Import runoff data grid from netcdf
@@ -177,7 +187,7 @@ for date in dates:
 	r_month = np.where(r_month > 0, r_month * (5*5) / 1.0e6, 0)
 	# Get ice component of runoff
 	r_month_ice = np.where(ice_mask.r == 1, r_month, np.nan)
-	print('Ice runoff pre-routing: %s' % np.nansum(r_month_ice))
+	ice_r_pre.append(np.nansum(r_month_ice))
 	# Save to a geoTIFF so that the routing toolbox can ingest it
 	georaster.simple_write_geotiff(
 		PROCESS_DIR + 'TMP_runoff_for_month_%s.tif' % n,
@@ -192,7 +202,7 @@ for date in dates:
 	loss_uri = PROCESS_DIR + 'loss.tif'
 	flux_uri = PROCESS_DIR + 'flux_month%s.tif' % n
 	routing.route_flux(
-			flowdir_uri, dempits_uri, source_uri, absorp_uri,
+			flowdir_uri, PROCESS_DIR + 'ROUTING_dempits_zeromargins.tif', source_uri, absorp_uri,
 			loss_uri, flux_uri, 'flux_only')
 
 	# Open up the fluxes so we can route from ice margin to coast.
@@ -201,13 +211,12 @@ for date in dates:
 	# Assign the runoff from each ice margin pixel to its nearest coastal pixel.
 	# Uses the look-up tree that we created above.
 	# Create the grid to save the coastal outflux values to
-	print('Ice routed to sheet margin but before coast routing: %s' % np.nansum(flux.r[ice == 1]))
+	ice_r_post.append(np.nansum(flux.r[ice == 1]))
 	coast_grid_ice = np.zeros((dist_land.ny, dist_land.nx))
 	for ry, rx in ice_points:
 		distance, index = tree.query((ry, rx), k=1)
 		cpy, cpx = coast_points[index, :]
-		coast_grid_ice[cpy, cpx] += flux.r[ry, rx]
-	print('Ice, routed to coast: %s' % np.sum(coast_grid_ice))		
+		coast_grid_ice[int(cpy), int(cpx)] += flux.r[int(ry), int(rx)]	
 
 	# Save coastal fluxes to store
 	store_ice[n,:,:] = np.flipud(coast_grid_ice)
@@ -217,13 +226,13 @@ for date in dates:
 
 
 	## Route tundra fluxes too ...
-	# Just do by euclidean distance
+	# Do by euclidean distance
 	r_month_tundra = np.where(land_mask.r == 1, r_month, np.nan)
 	coast_grid_tundra = np.zeros((dist_land.ny, dist_land.nx))
 	for ry, rx in land_points:
 		distance, index = tree.query((ry, rx), k=1)
 		cpy, cpx = coast_points[index, :]
-		coast_grid_tundra[cpy, cpx] += r_month_tundra[ry, rx]
+		coast_grid_tundra[int(cpy), int(cpx)] += r_month_tundra[int(ry), int(rx)]
 
 	# Save coastal fluxes to store
 	store_tundra[n,:,:] = np.flipud(coast_grid_tundra)
@@ -241,8 +250,14 @@ Masks to include in this product:
 * Ocean basins
 """
 
+# NC Conventions need to be sorted
 coords = {'TIME':dates, 'Y':runoff.Y, 'X':runoff.X}
 routed_runoff_ice = xr.DataArray(store_ice, coords=coords, dims=['TIME', 'Y', 'X'], encoding={'dtype':np.dtype('Float32')})
 routed_runoff_tundra = xr.DataArray(store_tundra, coords=coords, dims=['TIME', 'Y', 'X'], encoding={'dtype':np.dtype('Float32')})
 ds = xr.Dataset({'runoff_ice':routed_runoff_ice, 'runoff_tundra':routed_runoff_tundra})
-ds.to_netcdf('/home/at15963/Dropbox/routed_1958_1963.nc', format='NetCDF4')
+ds.to_netcdf('/home/at15963/Dropbox/RACMO23_routed_1958_2015.nc', format='NetCDF4')
+
+pre = pd.Series(ice_r_pre, index=dates)
+pre.to_csv(PROCESS_DIR + 'runoff_monthly_totals_pre_routing.csv')
+post = pd.Series(ice_r_post, index=dates)
+post.to_csv(PROCESS_DIR + 'runoff_monthly_totals_post_routing.csv')
