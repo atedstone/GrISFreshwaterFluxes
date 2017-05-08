@@ -1,0 +1,37 @@
+# FWF Readme
+
+There are 4 main components to the FWF processing:
+
+(1) Project RACMO runoff onto polar stereo grid
+(2) Route projected runoff to land pixels immediately adjacent to oceans
+(3) Compute solid ice discharge time series 
+(4) Create ocean basins raster from IHO definitions
+
+Set the environment variable `PROCESS_DIR` to the location where you are undertaking all processing for this project. 
+
+
+## Projecting runoff to polar stereo grid
+
+This process is very quick - just a few minutes on desktop machine for entire time series.
+
+Script: `reproject_racmo.py`
+
+
+## Routing
+
+Uses the PyGeoProcessing toolbox. The toolbox only runs under Python 2.7 (at least as far as I can tell), so requires a new conda environment that looks something like this:
+
+    conda create -n pygeoprocess
+    source activate pygeoprocess
+    conda install -c conda-forge python=2.7 numpy scipy cython gdal shapely
+    pip install pygeoprocessing
+
+
+## Solid ice discharge
+
+
+
+## Ocean basins mask
+
+Script: `allocate_coast_to_basin.py`. See script for citation of IHO data source
+
