@@ -4,6 +4,8 @@ from shapely.geometry import Point
 import numpy as np
 import matplotlib.pyplot as plt
 
+import georaster
+
 ## Load ice discharge datasets
 
 ## King/Howat/OSU monthly dataset
@@ -43,9 +45,8 @@ king_locs = pd.concat([lats.T, lons.T], axis=1)
 king_locs.columns = ['latitude', 'longitude']
 geometry = [Point(xy) for xy in zip(king_locs.longitude, king_locs.latitude)]
 king_geo = gpd.GeoDataFrame({'king_name':king_locs.index}, crs={'init':'epsg:4326'}, geometry=geometry)
-king_geo.geometry = king_geo.buffer(0.1)
-
-
+#king_geo.geometry = king_geo.buffer(0.1)
+king_geo.to_file('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/king_locs.shp')
 
 
 ## Enderlin annual dataset
@@ -66,10 +67,11 @@ enderlin_locs.columns = ['longitude', 'latitude']
 enderlin_locs.index = enderlin_cols
 geometry = [Point(xy) for xy in zip(enderlin_locs.longitude, enderlin_locs.latitude)]
 enderlin_geo = gpd.GeoDataFrame({'enderlin_name':enderlin_locs.index}, crs={'init':'epsg:4326'}, geometry=geometry)
-
+enderlin_geo.to_file('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/enderlin_locs.shp')
 
 
 ## Find equivalent labels between Enderlin and King datasets
+# Maybe I should do distances on projected (pstere) coordinates rather than lat/lon
 for ix, row in king_geo.iterrows():
 	dists = enderlin_geo.distance(row.geometry)
 	ix_min = dists.argmin()
@@ -139,9 +141,81 @@ print(king_annual_total_flux)
 ## Calculate % contribution of each month to annual flux...
 # percentages make glaciers comparable to one another
 # first convert to monthly perc of annual each year at each glacier
-glacier_annual_flux = monthly_flux.resample('1AS').sum()
-monthly_perc = 
-monthly_flux.groupby(monthly_flux.index.month)
+monthly_perc = monthly_flux.groupby(monthly_flux.index.year).apply(lambda x: (100 / x.sum()) * x)
+monthly_perc.groupby(monthly_perc.index.month).mean()
+## the monthly percentage is actually very similar every month on average, i.e. c. 8%/year.
+
+
+
+
+### Rignot data set
+
+rignot_raw = pd.read_excel('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/Bamber+co-ords_reformatted.xlsx', index_col='rignot_name')
+ix = [pd.datetime(y, 1, 1) for y in rignot_raw.columns[2:]]
+rignot = rignot_raw.drop(rignot_raw.columns[0], axis=1)
+rignot = rignot.drop(rignot_raw.columns[1], axis=1)
+rignot = rignot.T
+rignot.index = ix
+
+rignot_glaciers = []
+for c in rignot.columns:
+	c = c.lower().replace(' ', '') + '_discharge'
+	rignot_glaciers.append(c)
+
+rignot.columns = rignot_glaciers
+
+# Coordinates in spreadsheet are i,j IDL format, bamber grid, 2.5 km spacing
+# Use lookup matrices to identify pstere coordinates
+bamber_grid_y, bamber_grid_x = np.mgrid[-3400000:-600000:2500, -800000:700000:2500]
+
+# For debugging use - can write out a raster grid to check it
+# grid_proj = pyproj.Proj('+proj=stere +lat_0=90 +lat_ts=71 +lon_0=-39 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs')
+# trans = (bamber_grid_x[0,0], (bamber_grid_x[0,1]-bamber_grid_x[0,0]), 0, bamber_grid_y[0,0], 0, (bamber_grid_y[1,0]-bamber_grid_y[0,0]))
+# georaster.simple_write_geotiff(
+# 	'bamber_grid_y.tif',
+# 	bamber_grid_y,
+# 	trans,
+# 	proj4=grid_proj.srs,
+# 	dtype=gdal.GDT_Float32
+# 	)
+
+rignot_x = []
+rignot_y = []
+for x, y in zip(rignot_raw['x'], rignot_raw['y']):
+	rignot_y.append(bamber_grid_y[y, x])
+	rignot_x.append(bamber_grid_x[y, x])
+
+rignot_locs = pd.DataFrame({'x':rignot_x, 'y':rignot_y})
+# stored as kms, so convert to metres
+
+rignot_locs.index = rignot_glaciers
+geometry = [Point(xy) for xy in zip(rignot_locs.x, rignot_locs.y)]
+rignot_proj4 = '+proj=stere +lat_0=90 +lat_ts=71 +lon_0=-39 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs'
+rignot_pstere = gpd.GeoDataFrame({'rignot_name':rignot_locs.index}, crs=rignot_proj4, geometry=geometry)
+rignot_geo = rignot_pstere.to_crs({'init':'epsg:4326'})
+rignot_geo.to_file('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/rignot_locs.shp')
+
+
+for ix, row in rignot_geo.iterrows():
+	dists = enderlin_geo.distance(row.geometry)
+	ix_min = dists.argmin()
+	equiv_label = enderlin_geo.loc[ix_min].enderlin_name
+	print('Rignot: %s, Enderlin: %s' % (row.rignot_name, equiv_label))
+
+
+"""
+Next steps here:
+finish up association of Rignot glaciers with Enderlin
+ 	- see QGIS file
+compare Rignot and Enderlin, remove magnitude difference
+for each glacier, create complete time series of Rignot-Enderlin-King
+for coordinates of each glacier use Enderlin (at least as far as possible)
+correlate annual spatial mean of entire time series with runoff
+Use correlation to extend discharge time series
+	- for temporal (monthly) distn use the monthly percentage calculated from the King dataset
+	- not yet sure how to to distribute total annual pre-92 discharge spatially?
+"""	
+
 
 
 
