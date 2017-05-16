@@ -155,9 +155,217 @@ monthly_perc.groupby(monthly_perc.index.month).mean()
 ## the monthly percentage is actually very similar every month on average, i.e. c. 8%/year.
 
 
+# ============================================================================
+## Bringing Rignot into the analysis...
+
+## Load Rignot's drainage basins
+rignot_basins = gpd.read_file('/home/at15963/Dropbox/work/papers/bamber_fwf/JLB_Analysis_2015/combined.shp')
+# remove the 'basin' prefix
+basins_pstere = rignot_basins.to_crs(pstere)
+basins_pstere.columns = ['GRIDCODE', 'area', 'geometry', 'basin']
 
 
-### Rignot data set
+## Resolve Ellyns' individual outlet glaciers into their Rignot basins
+# First do a spatial join, based on glacier point *within* basin poly
+enderlin_names_basins = gpd.sjoin(enderlin_pstere, basins_pstere, how='left', op='within')
+
+# Next, for the outlets that are not within a basin, resolve them to the nearest one
+enderlin_names_basins = enderlin_names_basins.assign(dist=0)
+unalloc = enderlin_names_basins[enderlin_names_basins.basin.isnull()]
+for ix, row in unalloc.iterrows():
+	dists = basins_pstere.distance(row.geometry)
+	ix_min = dists.argmin()
+	nearest_basin = basins_pstere.loc[ix_min, 'basin']
+	enderlin_names_basins.loc[ix, 'basin'] = nearest_basin	
+	enderlin_names_basins.loc[ix, 'dist'] = dists.min()
+
+
+## Aggregate Ellyn's measurements to basin outputs
+grouped = enderlin_names_basins.groupby('basin')
+store = {}
+for basin, glaciers in grouped:
+	q = enderlin.filter(items=glaciers.enderlin_name).sum(axis=1)
+	store[basin] = q
+basin_q_enderlin = pd.DataFrame(store)
+# Special logic: basin38 is actually several discontinuous regions. 
+# First summate, then drop the constituent basins.
+basin_q_enderlin = basin_q_enderlin.assign(basin38=basin_q_enderlin.filter(like='basin38_').sum(axis=1))
+basin_q_enderlin = basin_q_enderlin.drop(labels=basin_q_enderlin.filter(like='basin38_').columns.tolist(), axis=1)
+
+
+## Import Rignot's by-basin measurements 
+rignot_raw = pd.read_excel('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/Bamber+co-ords_updatedbasins.xlsx', 
+	index_col='rignot_name')
+rignot = rignot_raw.drop(labels=['x', 'y', 'area', 'F2000', 'F1996'], axis=1)
+# Drop any entries without a basin
+rignot = rignot[rignot.basin.notnull()]
+rignot.basin = ['basin{:.0f}'.format(n) for n in rignot.basin]
+# Sum up the few cases where there a multiple outlets per basin (e.g. Petermann)
+rignot = rignot.groupby(rignot.basin).sum()
+# Basins now unique and provide the row index
+# Create a date index
+date_ix = [pd.datetime(y, 1, 1) for y in rignot.columns]
+# Transpose rows<-->columns
+basin_q_rignot = rignot.T
+# Rows are now dates, columns are basins
+basin_q_rignot.index = date_ix
+
+
+## facet plot of basin-by-basin comparisons
+figure()
+n = 1
+for b in basin_q_rignot.columns:
+	subplot(8, 6, n)
+	title(b)
+	try:
+		plot(basin_q_rignot.index, basin_q_rignot[b], 'blue')
+		plot(basin_q_enderlin.index, basin_q_enderlin[b], 'red')
+		plot(basin_q_rignot_sc.index, basin_q_rignot_sc[b], '--b')
+		xlim('2000-01-01', '2015-12-31')
+	except KeyError:
+		# This logic means we don't see basins that only have Enderlin data
+		pass
+	n += 1
+
+
+## Use Enderlin data to work out % contribution of each glacier to basin's outflow
+grouped = enderlin_names_basins.groupby('basin')
+store = {}
+for basin, glaciers in grouped:
+	# Calculate mean annual basin-wide Q
+	q_basin = enderlin.filter(items=glaciers.enderlin_name).sum(axis=1).mean()
+	# Calculate mean annual Q per glacier
+	q_glaciers = enderlin.filter(items=glaciers.enderlin_name).mean(axis=0)
+	# Calculate %contribution of each glacier to basin Q
+	qp = (100 / q_basin) * q_glaciers
+	# Store it
+	store[basin] = qp
+glacier_basin_contrib = pd.DataFrame(store)
+# This could be collapsed to:
+"""
+| glacier	| contrib% 	| basin |
+| ...		|			|		|
+| 		 	|			|		|
+
+but I haven't done this yet.
+"""
+
+## Scale Rignot basin data to remove offset relative to Enderlin
+# Use only the common temporal period
+# Basins without Enderlin data get set to NaN...
+basin_q_rignot_sc = basin_q_rignot - \
+	(basin_q_rignot['2000':'2009'].mean()-basin_q_enderlin['2000':'2009'].mean())
+# ...so substitute these back in.
+# n.b. some null columns will still be in here because Rignot dataset does not
+# contain data for every single basin that they defined!
+basin_q_rignot_sc[basin_q_rignot_sc.isnull()] = basin_q_rignot
+
+
+# Focus at the moment is still on getting 1992-2015 time series sorted
+## Split Rignot per-basin data out to Enderlin-defined outlets using Enderlin % contributions
+# Produces a 'per-glacier' time series like Enderlin's
+# The actual point here however is to produce 1992-1999 data set 
+# which we can then use in correlation
+
+
+# We are trying to get a dataframe with glaciers=columns, years=rows
+store = []
+for basin in basin_q_rignot_sc.columns:
+
+	# Time series of basin discharge
+	basin_q = basin_q_rignot_sc.loc[:, basin]
+
+	# Check to see if Enderlin has measurement in this basin
+	if basin in glacier_basin_contrib.columns:
+		# Extract % contributions
+		contribs = glacier_basin_contrib.T.loc[basin, :]
+		# Remove all glaciers which do not contribute
+		contribs = contribs[contribs.notnull()]
+		print(contribs)
+		# Allocate year-by-year
+		glacier_q = []
+		for year, y_q in basin_q.iteritems():
+			# Contribution of each glacier for one year
+			g_y_q = (100 / y_q) *  contribs
+			g_y_q.name = year
+			glacier_q.append(g_y_q)
+		# Dataframe with cols=glaciers, rows=years
+		glaciers_ts = pd.DataFrame(glacier_q)	
+		store.append(glaciers_ts)	
+	else:
+		# Retain basin as an outflow in its own right
+		store.append(basin_q)
+
+glaciers_rignot_sc = pd.concat(store, axis=1)
+glaciers_rignot_sc = glaciers_rignot_sc.dropna(axis=1, how='all')
+
+# Next step here is to replace Rignot values with Enderlin from 2000 onward.
+
+
+
+
+# Now deal with pre-1992 data set...
+## Take a very similar approach with annual Q estimates from correlation
+# but rather than thinking in basin terms, just attribute direct to each outlet
+# some outlets also have their own seasonal cycle to consider (c.f. King)
+
+
+
+
+
+
+"""
+Next steps here:
+finish up association of Rignot glaciers with Enderlin
+ 	- see QGIS file
+compare Rignot and Enderlin, remove magnitude difference
+for each glacier, create complete time series of Rignot-Enderlin-King
+for coordinates of each glacier use Enderlin (at least as far as possible)
+correlate annual spatial mean of entire time series with runoff
+Use correlation to extend discharge time series
+	- for temporal (monthly) distn use the monthly percentage calculated from the King dataset
+	- not yet sure how to to distribute total annual pre-92 discharge spatially?
+"""	
+
+
+
+
+
+# joined = gpd.sjoin(enderlin_geo, king_geo, how='right', op='within')
+
+# len(joined)
+
+
+
+# # Compare the King and Enderlin datasets for common glaciers
+# king_annual_glacier_flux = monthly_flux.resample('1AS').sum()
+# for ne, nk in zip(joined.enderlin_name, joined.king_name):
+# 	plt.figure()
+# 	plt.title(ne)
+# 	plt.plot(enderlin.index, enderlin[ne], 'r')
+# 	plt.plot(king_annual_glacier_flux.index, king_annual_glacier_flux[nk], 'b')	
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"""
+##Previous attempts to join all three time series together using glacier names (NOT containing basins)
 
 rignot_raw = pd.read_excel('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/Bamber+co-ords_reformatted.xlsx', index_col='rignot_name')
 ix = [pd.datetime(y, 1, 1) for y in rignot_raw.columns[2:]]
@@ -241,48 +449,13 @@ geodf_all = geodf_all.drop('enderlin_dummy', axis=1)
 geodf_all = geodf_all.drop('geometry', axis=1)
 
 geodf_all.to_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/glacier_names_lookup.csv')
+"""
+
+"""
+##old rignot basin merging logic
 
 
-
-
-
-## Resolve individual outlet glaciers to the basins used in Rignot's 2008 analysis
-rignot_basins = gpd.read_file('/home/at15963/Dropbox/work/papers/bamber_fwf/JLB_Analysis_2015/combined.shp')
-# remove the 'basin' prefix
-basins_pstere = rignot_basins.to_crs(pstere)
-basins_pstere.columns = ['GRIDCODE', 'area', 'geometry', 'basin']
-enderlin_names_basins = gpd.sjoin(enderlin_pstere, basins_pstere, how='left', op='within')
-
-# For the outlets that are not within a basin, resolve them to the nearest one
-enderlin_names_basins = enderlin_names_basins.assign(dist=0)
-unalloc = enderlin_names_basins[enderlin_names_basins.basin.isnull()]
-for ix, row in unalloc.iterrows():
-	dists = basins_pstere.distance(row.geometry)
-	ix_min = dists.argmin()
-	nearest_basin = basins_pstere.loc[ix_min, 'basin']
-	enderlin_names_basins.loc[ix, 'basin'] = nearest_basin	
-	enderlin_names_basins.loc[ix, 'dist'] = dists.min()
-
-
-## Calculate basin-by-basin fluxes
-grouped = enderlin_names_basins.groupby('basin')
-store = {}
-for basin, glaciers in grouped:
-	q = enderlin.filter(items=glaciers.enderlin_name).sum(axis=1)
-	store[basin] = q
-basin_q_enderlin = pd.DataFrame(store)
-basin_q_enderlin = basin_q_enderlin.assign(basin38=basin_q_enderlin.filter(like='basin38_').sum(axis=1))
-basin_q_enderlin = basin_q_enderlin.drop(labels=basin_q_enderlin.filter(like='basin38_').columns.tolist(), axis=1)
-
-## Rignot by basin (rather than by glacier name, but it's the same thing really)
-rignot_raw2 = pd.read_excel('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/Bamber+co-ords_updatedbasins.xlsx', index_col='rignot_name')
-# ix = [pd.datetime(y, 1, 1) for y in rignot_raw.columns[2:]]
-# rignot = rignot_raw.drop(rignot_raw.columns[0], axis=1)
-# rignot = rignot.drop(rignot_raw.columns[1], axis=1)
-# rignot = rignot.T
-# rignot.index = ix
-
-rignot_names_basins = pd.Series(rignot_raw2['basin'])
+rignot_names_basins = pd.Series(rignot.index)
 rignot_names_basins.index = rignot_glaciers
 rignot_names_basins = rignot_names_basins[rignot_names_basins.notnull()]
 # Convert from float to string with basin prefix
@@ -295,68 +468,4 @@ for basin, glaciers in grouped:
 	q = rignot.filter(items=glaciers.index).sum(axis=1)
 	store[basin] = q
 basin_q_rignot = pd.DataFrame(store)
-
-# facet plot of basin-by-basin comparisons
-figure()
-n = 1
-for b in basin_q_rignot.columns:
-	subplot(8, 6, n)
-	title(b)
-	try:
-		plot(basin_q_rignot.index, basin_q_rignot[b], 'blue')
-		plot(basin_q_enderlin.index, basin_q_enderlin[b], 'red')
-		xlim('2000-01-01', '2015-12-31')
-	except KeyError:
-		pass
-	n += 1
-
-
-# Use Enderlin data to work out % contribution of each glacier to basin's outflow
-grouped = enderlin_names_basins.groupby('basin')
-store = {}
-for basin, glaciers in grouped:
-	# Calculate mean annual basin-wide Q
-	q_basin = enderlin.filter(items=glaciers.enderlin_name).sum(axis=1).mean()
-	# Calculate mean annual Q per glacier
-	q_glaciers = enderlin.filter(items=glaciers.enderlin_name).mean(axis=0)
-	# Calculate %contribution of each glacier to basin Q
-	qp = (100 / q_basin) * q_glaciers
-	# Store it
-	store[basin] = qp
-glacier_basin_contrib = pd.DataFrame(store)
-
-# Split Rignot per-basin data out to Enderlin-defined outlets
-# Produces a 'per-glacier' time series like Enderlin's
-for ix, row in rignot.iterrows():
-
-
 """
-Next steps here:
-finish up association of Rignot glaciers with Enderlin
- 	- see QGIS file
-compare Rignot and Enderlin, remove magnitude difference
-for each glacier, create complete time series of Rignot-Enderlin-King
-for coordinates of each glacier use Enderlin (at least as far as possible)
-correlate annual spatial mean of entire time series with runoff
-Use correlation to extend discharge time series
-	- for temporal (monthly) distn use the monthly percentage calculated from the King dataset
-	- not yet sure how to to distribute total annual pre-92 discharge spatially?
-"""	
-
-
-
-
-
-# joined = gpd.sjoin(enderlin_geo, king_geo, how='right', op='within')
-
-# len(joined)
-
-
-
-# # Compare the King and Enderlin datasets for common glaciers
-# king_annual_glacier_flux = monthly_flux.resample('1AS').sum()
-# for ne, nk in zip(joined.enderlin_name, joined.king_name):
-# 	plt.figure()
-# 	plt.title(ne)
-# 	plt.plot(enderlin.index, enderlin[ne], 'r')
-# 	plt.plot(king_annual_glacier_flux.index, king_annual_glacier_flux[nk], 'b')	
