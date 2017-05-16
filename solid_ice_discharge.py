@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 
 import georaster
 
+pstere = {'init':'epsg:3413'}
+
 ## Load ice discharge datasets
 
 ## King/Howat/OSU monthly dataset
@@ -47,7 +49,7 @@ geometry = [Point(xy) for xy in zip(king_locs.longitude, king_locs.latitude)]
 king_geo = gpd.GeoDataFrame({'king_name':king_locs.index}, crs={'init':'epsg:4326'}, geometry=geometry)
 #king_geo.geometry = king_geo.buffer(0.1)
 king_geo.to_file('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/king_locs.shp')
-
+king_pstere = king_geo.to_crs(pstere)
 
 ## Enderlin annual dataset
 # Cut the various average rows off the bottom of the dataset
@@ -68,15 +70,22 @@ enderlin_locs.index = enderlin_cols
 geometry = [Point(xy) for xy in zip(enderlin_locs.longitude, enderlin_locs.latitude)]
 enderlin_geo = gpd.GeoDataFrame({'enderlin_name':enderlin_locs.index}, crs={'init':'epsg:4326'}, geometry=geometry)
 enderlin_geo.to_file('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/enderlin_locs.shp')
+enderlin_pstere = enderlin_geo.to_crs(pstere)
 
-
-## Find equivalent labels between Enderlin and King datasets
-# Maybe I should do distances on projected (pstere) coordinates rather than lat/lon
-for ix, row in king_geo.iterrows():
-	dists = enderlin_geo.distance(row.geometry)
-	ix_min = dists.argmin()
-	equiv_label = enderlin_geo.loc[ix_min].enderlin_name
-	print('King: %s, Enderlin: %s' % (row.king_name, equiv_label))
+## Find equivalent labels between Enderlin and King datasets (metres - using pstere coords)
+king_equiv = []
+king_equiv_ix = []
+for ix, row in king_pstere.iterrows():
+	dists = enderlin_pstere.distance(row.geometry)
+	if dists.min() < 15000:
+		ix_min = dists.argmin()
+		equiv_label = enderlin_pstere.loc[ix_min].enderlin_name
+		print('King: %s, Enderlin: %s' % (row.king_name, equiv_label))
+		king_equiv.append(row.king_name)
+		king_equiv_ix.append(equiv_label)
+	else:
+		king_equiv.append(np.nan)
+		king_equiv_ix.append(np.nan)
 
 # At this point I had to do some manual re-mapping of a few labels...
 # ...hence the manually-specified list of names below.
@@ -191,16 +200,134 @@ rignot_locs = pd.DataFrame({'x':rignot_x, 'y':rignot_y})
 rignot_locs.index = rignot_glaciers
 geometry = [Point(xy) for xy in zip(rignot_locs.x, rignot_locs.y)]
 rignot_proj4 = '+proj=stere +lat_0=90 +lat_ts=71 +lon_0=-39 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs'
-rignot_pstere = gpd.GeoDataFrame({'rignot_name':rignot_locs.index}, crs=rignot_proj4, geometry=geometry)
-rignot_geo = rignot_pstere.to_crs({'init':'epsg:4326'})
+rignot_bamber = gpd.GeoDataFrame({'rignot_name':rignot_locs.index}, crs=rignot_proj4, geometry=geometry)
+rignot_geo = rignot_bamber.to_crs({'init':'epsg:4326'})
 rignot_geo.to_file('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/rignot_locs.shp')
+rignot_pstere = rignot_geo.to_crs(pstere)
+
+rignot_equiv = []
+rignot_equiv_ix = []
+for ix, row in rignot_pstere.iterrows():
+	dists = enderlin_pstere.distance(row.geometry)
+	if dists.min() < 50000:
+		ix_min = dists.argmin()
+		equiv_label = enderlin_pstere.loc[ix_min].enderlin_name
+		print('Rignot: %s, Enderlin: %s' % (row.rignot_name, equiv_label))
+		rignot_equiv.append(row.rignot_name)
+		rignot_equiv_ix.append(equiv_label)
+	else:
+		rignot_equiv.append(np.nan)
+		rignot_equiv_ix.append(np.nan)
 
 
-for ix, row in rignot_geo.iterrows():
-	dists = enderlin_geo.distance(row.geometry)
+geodf_all = enderlin_pstere.merge(pd.DataFrame({'enderlin_name':rignot_equiv}, index=rignot_equiv), on='enderlin_name')
+
+enderlin_master = pd.DataFrame({'enderlin_dummy':1}, index=enderlin_pstere.enderlin_name)
+geodf_all = pd.merge(
+	enderlin_master, 
+	pd.DataFrame({'rignot_name':rignot_equiv}, index=rignot_equiv_ix), 
+	how='left', 
+	left_index=True,
+	right_index=True)
+
+geodf_all = pd.merge(
+	geodf_all, 
+	pd.DataFrame({'king_name':king_equiv}, index=king_equiv_ix), 
+	how='left', 
+	left_index=True,
+	right_index=True)
+
+geodf_all = geodf_all.drop('enderlin_dummy', axis=1)
+geodf_all = geodf_all.drop('geometry', axis=1)
+
+geodf_all.to_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/glacier_names_lookup.csv')
+
+
+
+
+
+## Resolve individual outlet glaciers to the basins used in Rignot's 2008 analysis
+rignot_basins = gpd.read_file('/home/at15963/Dropbox/work/papers/bamber_fwf/JLB_Analysis_2015/combined.shp')
+# remove the 'basin' prefix
+basins_pstere = rignot_basins.to_crs(pstere)
+basins_pstere.columns = ['GRIDCODE', 'area', 'geometry', 'basin']
+enderlin_names_basins = gpd.sjoin(enderlin_pstere, basins_pstere, how='left', op='within')
+
+# For the outlets that are not within a basin, resolve them to the nearest one
+enderlin_names_basins = enderlin_names_basins.assign(dist=0)
+unalloc = enderlin_names_basins[enderlin_names_basins.basin.isnull()]
+for ix, row in unalloc.iterrows():
+	dists = basins_pstere.distance(row.geometry)
 	ix_min = dists.argmin()
-	equiv_label = enderlin_geo.loc[ix_min].enderlin_name
-	print('Rignot: %s, Enderlin: %s' % (row.rignot_name, equiv_label))
+	nearest_basin = basins_pstere.loc[ix_min, 'basin']
+	enderlin_names_basins.loc[ix, 'basin'] = nearest_basin	
+	enderlin_names_basins.loc[ix, 'dist'] = dists.min()
+
+
+## Calculate basin-by-basin fluxes
+grouped = enderlin_names_basins.groupby('basin')
+store = {}
+for basin, glaciers in grouped:
+	q = enderlin.filter(items=glaciers.enderlin_name).sum(axis=1)
+	store[basin] = q
+basin_q_enderlin = pd.DataFrame(store)
+basin_q_enderlin = basin_q_enderlin.assign(basin38=basin_q_enderlin.filter(like='basin38_').sum(axis=1))
+basin_q_enderlin = basin_q_enderlin.drop(labels=basin_q_enderlin.filter(like='basin38_').columns.tolist(), axis=1)
+
+## Rignot by basin (rather than by glacier name, but it's the same thing really)
+rignot_raw2 = pd.read_excel('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/Bamber+co-ords_updatedbasins.xlsx', index_col='rignot_name')
+# ix = [pd.datetime(y, 1, 1) for y in rignot_raw.columns[2:]]
+# rignot = rignot_raw.drop(rignot_raw.columns[0], axis=1)
+# rignot = rignot.drop(rignot_raw.columns[1], axis=1)
+# rignot = rignot.T
+# rignot.index = ix
+
+rignot_names_basins = pd.Series(rignot_raw2['basin'])
+rignot_names_basins.index = rignot_glaciers
+rignot_names_basins = rignot_names_basins[rignot_names_basins.notnull()]
+# Convert from float to string with basin prefix
+rignot_names_basins = pd.Series(['basin{:.0f}'.format(n) for n in rignot_names_basins], index=rignot_names_basins.index)
+# Un-intuitive: if ends with b then returns true, otherwise null, so want to retain null values
+#rignot_names_basins = rignot_names_basins[rignot_names_basins.str.endswith('b').isnull()]
+grouped = rignot_names_basins.groupby(rignot_names_basins)
+store = {}
+for basin, glaciers in grouped:
+	q = rignot.filter(items=glaciers.index).sum(axis=1)
+	store[basin] = q
+basin_q_rignot = pd.DataFrame(store)
+
+# facet plot of basin-by-basin comparisons
+figure()
+n = 1
+for b in basin_q_rignot.columns:
+	subplot(8, 6, n)
+	title(b)
+	try:
+		plot(basin_q_rignot.index, basin_q_rignot[b], 'blue')
+		plot(basin_q_enderlin.index, basin_q_enderlin[b], 'red')
+		xlim('2000-01-01', '2015-12-31')
+	except KeyError:
+		pass
+	n += 1
+
+
+# Use Enderlin data to work out % contribution of each glacier to basin's outflow
+grouped = enderlin_names_basins.groupby('basin')
+store = {}
+for basin, glaciers in grouped:
+	# Calculate mean annual basin-wide Q
+	q_basin = enderlin.filter(items=glaciers.enderlin_name).sum(axis=1).mean()
+	# Calculate mean annual Q per glacier
+	q_glaciers = enderlin.filter(items=glaciers.enderlin_name).mean(axis=0)
+	# Calculate %contribution of each glacier to basin Q
+	qp = (100 / q_basin) * q_glaciers
+	# Store it
+	store[basin] = qp
+glacier_basin_contrib = pd.DataFrame(store)
+
+# Split Rignot per-basin data out to Enderlin-defined outlets
+# Produces a 'per-glacier' time series like Enderlin's
+for ix, row in rignot.iterrows():
 
 
 """
