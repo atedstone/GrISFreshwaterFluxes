@@ -3,16 +3,18 @@ import geopandas as gpd
 from shapely.geometry import Point
 import numpy as np
 import matplotlib.pyplot as plt
+import xarray as xr
+import statsmodels.api as sm
 
 import georaster
 
 pstere = {'init':'epsg:3413'}
+plot_figs = True
 
-## Load ice discharge datasets
+### Load ice discharge datasets
 
 ## King/Howat/OSU monthly dataset
-
-# Create column headings 
+# First create/tidy up the column headings
 king_cols = pd.read_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/monthly_discharge.csv',
 	skiprows=[1, 3], nrows=2)
 
@@ -31,7 +33,7 @@ for k, i in king_cols.iteritems():
 
 	kcols.append(name_col)
 
-# Use columns to load dataset
+# Now use columns to load dataset
 king = pd.read_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/monthly_discharge.csv',
 	skiprows=4, names=kcols, parse_dates={'date':['Year', 'Month']}, index_col='date')
 
@@ -47,12 +49,12 @@ king_locs = pd.concat([lats.T, lons.T], axis=1)
 king_locs.columns = ['latitude', 'longitude']
 geometry = [Point(xy) for xy in zip(king_locs.longitude, king_locs.latitude)]
 king_geo = gpd.GeoDataFrame({'king_name':king_locs.index}, crs={'init':'epsg:4326'}, geometry=geometry)
-#king_geo.geometry = king_geo.buffer(0.1)
 king_geo.to_file('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/king_locs.shp')
 king_pstere = king_geo.to_crs(pstere)
 
+
 ## Enderlin annual dataset
-# Cut the various average rows off the bottom of the dataset
+# Specifying nrows cuts the various average rows off the bottom of the dataset 
 enderlin_raw = pd.read_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/GrIS_D-timeseries.txt', encoding='mac_roman', 
 	delim_whitespace=True, index_col='Glacier_Name', nrows=178)
 
@@ -63,7 +65,7 @@ enderlin.index = pd.date_range('2000-01-01', '2012-01-01', freq='1AS')
 enderlin_cols = [c + '_discharge' for c in enderlin.columns]
 enderlin.columns = enderlin_cols
 
-
+# Enderlin glacier locations
 enderlin_locs = pd.concat([enderlin_raw[enderlin_raw.columns[0]], enderlin_raw[enderlin_raw.columns[1]]], axis=1)
 enderlin_locs.columns = ['longitude', 'latitude']
 enderlin_locs.index = enderlin_cols
@@ -71,6 +73,7 @@ geometry = [Point(xy) for xy in zip(enderlin_locs.longitude, enderlin_locs.latit
 enderlin_geo = gpd.GeoDataFrame({'enderlin_name':enderlin_locs.index}, crs={'init':'epsg:4326'}, geometry=geometry)
 enderlin_geo.to_file('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/enderlin_locs.shp')
 enderlin_pstere = enderlin_geo.to_crs(pstere)
+
 
 ## Find equivalent labels between Enderlin and King datasets (metres - using pstere coords)
 king_equiv = []
@@ -87,8 +90,13 @@ for ix, row in king_pstere.iterrows():
 		king_equiv.append(np.nan)
 		king_equiv_ix.append(np.nan)
 
-# At this point I had to do some manual re-mapping of a few labels...
-# ...hence the manually-specified list of names below.
+"""
+ At this point I exported the king_equiv values above and then did some further
+ manual re-mapping of a few labels.
+ ...hence the manually-specified list of names below.
+"""
+
+ # List is same length as King dataset.
 enderlin_names_for_king = ['79fjorden_discharge',
 	'hayes_discharge',
 	'zachariaeisstrom_discharge',
@@ -117,46 +125,51 @@ enderlin_names_for_king = ['79fjorden_discharge',
 # It seems impossible to match nordre* glaciers, so drop them here (and dropped in list above already)
 king = king.drop('nordrenorth_discharge', axis=1)
 king = king.drop('nordresouth_discharge', axis=1)
+# Retain only discharge, get rid of std
+king = king.filter(like='_discharge')
+# Now remap King columns to Enderlin names
+king.columns = enderlin_names_for_king
 
-
-
-# Convert King's monthly rate to monthly flux then calculate total ice-sheet-wide annual flux
+## Convert King's monthly rate to monthly flux then calculate total ice-sheet-wide annual flux
 king = king.assign(year_length=np.where(king.index.is_leap_year, 366, 365))
 king = king.assign(month_length=king.index.daysinmonth)
 monthly_rate = king.filter(like='discharge')
 monthly_flux = monthly_rate.apply(lambda x: (x / king.year_length.values) * king.month_length.values)
+# Annual flux ice-sheet-wide
 king_annual_total_flux = monthly_flux.resample('1AS').sum().T.sum()
-
-
-
-## Compare Enderlin and King
+# Annual flux per flacier
 king_annual_glacier_flux = monthly_flux.resample('1AS').sum()
-for nk, ne in zip(king.filter(like='discharge').columns, enderlin_names_for_king):
-	print(nk, ne)	
+
+# Compare Enderlin and King
+# This doesn't necessarily work currently
+if plot_figs:
 	plt.figure()
-	plt.title(ne)
-	plt.plot(enderlin.index, enderlin[ne], 'r')
-	plt.plot(king_annual_glacier_flux.index, king_annual_glacier_flux[nk], 'b')
-	plt.show()
+	n = 1
+	for nk, ne in zip(king.filter(like='discharge').columns, enderlin_names_for_king):
+		print(nk, ne)	
+		plt.subplot(8, 6, n)
+		plt.title(ne)
+		plt.plot(enderlin.index, enderlin[ne], 'r')
+		plt.plot(king_annual_glacier_flux.index, king_annual_glacier_flux[nk], 'b')
+		n += 1
+
 
 # Discharge record from two glaciers does not match - ukassorssuaq and torsukatat
 # Nevertheless, continue for the moment
 # Enderlin total for King glaciers:
-enderlin_annual_subset = enderlin.filter(items=enderlin_names_for_king).T.sum()
+enderlin_annual_subset = enderlin.filter(items=king.columns).T.sum()
 print(enderlin_annual_subset)
 print(king_annual_total_flux)
 
 
 ## Calculate % contribution of each month to annual flux...
 # percentages make glaciers comparable to one another
-# first convert to monthly perc of annual each year at each glacier
+# first convert to monthly perc of annual each year at each glacier - i.e. still a time series
 monthly_perc = monthly_flux.groupby(monthly_flux.index.year).apply(lambda x: (100 / x.sum()) * x)
-monthly_perc.groupby(monthly_perc.index.month).mean()
+#monthly_perc.groupby(monthly_perc.index.month).mean()
 ## the monthly percentage is actually very similar every month on average, i.e. c. 8%/year.
 
 
-# ============================================================================
-## Bringing Rignot into the analysis...
 
 ## Load Rignot's drainage basins
 rignot_basins = gpd.read_file('/home/at15963/Dropbox/work/papers/bamber_fwf/JLB_Analysis_2015/combined.shp')
@@ -180,6 +193,17 @@ for ix, row in unalloc.iterrows():
 	enderlin_names_basins.loc[ix, 'dist'] = dists.min()
 
 
+## For mass continuity with Rignot, move some sub-basins into bigger basins...
+# allocate basins below Helheim into Helheim basin
+enderlin_names_basins.loc[enderlin_names_basins.basin.str.contains('basin46'), 'basin'] = 'basin11'
+enderlin_names_basins.loc[enderlin_names_basins.basin.str.contains('basin47'), 'basin'] = 'basin11'
+# ikertivaq north, pamiataq, unnamed into ikertivaq (as sub-basin is on flow divide)
+enderlin_names_basins.loc[enderlin_names_basins.basin.str.contains('basin48'), 'basin'] = 'basin12'
+enderlin_names_basins.loc[enderlin_names_basins.basin.str.contains('basin49'), 'basin'] = 'basin12'
+# Allocate all glaciers in basin38_* basins to basin38
+enderlin_names_basins.loc[enderlin_names_basins.basin.str.contains('basin38_'), 'basin'] = 'basin38'
+
+
 ## Aggregate Ellyn's measurements to basin outputs
 grouped = enderlin_names_basins.groupby('basin')
 store = {}
@@ -187,10 +211,6 @@ for basin, glaciers in grouped:
 	q = enderlin.filter(items=glaciers.enderlin_name).sum(axis=1)
 	store[basin] = q
 basin_q_enderlin = pd.DataFrame(store)
-# Special logic: basin38 is actually several discontinuous regions. 
-# First summate, then drop the constituent basins.
-basin_q_enderlin = basin_q_enderlin.assign(basin38=basin_q_enderlin.filter(like='basin38_').sum(axis=1))
-basin_q_enderlin = basin_q_enderlin.drop(labels=basin_q_enderlin.filter(like='basin38_').columns.tolist(), axis=1)
 
 
 ## Import Rignot's by-basin measurements 
@@ -211,23 +231,6 @@ basin_q_rignot = rignot.T
 basin_q_rignot.index = date_ix
 
 
-## facet plot of basin-by-basin comparisons
-figure()
-n = 1
-for b in basin_q_rignot.columns:
-	subplot(8, 6, n)
-	title(b)
-	try:
-		plot(basin_q_rignot.index, basin_q_rignot[b], 'blue')
-		plot(basin_q_enderlin.index, basin_q_enderlin[b], 'red')
-		plot(basin_q_rignot_sc.index, basin_q_rignot_sc[b], '--b')
-		xlim('2000-01-01', '2015-12-31')
-	except KeyError:
-		# This logic means we don't see basins that only have Enderlin data
-		pass
-	n += 1
-
-
 ## Use Enderlin data to work out % contribution of each glacier to basin's outflow
 grouped = enderlin_names_basins.groupby('basin')
 store = {}
@@ -241,33 +244,46 @@ for basin, glaciers in grouped:
 	# Store it
 	store[basin] = qp
 glacier_basin_contrib = pd.DataFrame(store)
-# This could be collapsed to:
-"""
-| glacier	| contrib% 	| basin |
-| ...		|			|		|
-| 		 	|			|		|
+# Collapse to glacier-basinid-contribution.
+#basin_ids = glacier_basin_contrib.apply(lambda row: row.first_valid_index(), axis=1)
+#basin_contrib = glacier_basin_contrib.apply(lambda row: row.dropna().iloc[0], axis=1)
+glacier_basin_contrib = pd.concat({
+	'basin': glacier_basin_contrib.apply(lambda row: row.first_valid_index(), axis=1), 
+	'contrib': glacier_basin_contrib.apply(lambda row: row.dropna().iloc[0], axis=1)
+	}, axis=1)
 
-but I haven't done this yet.
-"""
 
 ## Scale Rignot basin data to remove offset relative to Enderlin
 # Use only the common temporal period
 # Basins without Enderlin data get set to NaN...
-basin_q_rignot_sc = basin_q_rignot - \
-	(basin_q_rignot['2000':'2009'].mean()-basin_q_enderlin['2000':'2009'].mean())
-# ...so substitute these back in.
-# n.b. some null columns will still be in here because Rignot dataset does not
-# contain data for every single basin that they defined!
-basin_q_rignot_sc[basin_q_rignot_sc.isnull()] = basin_q_rignot
+basin_scaling = basin_q_rignot['2000':'2009'].mean() - basin_q_enderlin['2000':'2009'].mean()
+basin_q_rignot_sc = basin_q_rignot - basin_scaling
+# ...so substitute these back in using mean basin scaling
+# n.b. some null columns remain because Rignot dataset does not
+# contain data for every single basin that they defined.
+basin_q_rignot_sc[basin_q_rignot_sc.isnull()] = basin_q_rignot - basin_scaling.mean()
 
 
-# Focus at the moment is still on getting 1992-2015 time series sorted
+## facet plot of basin-by-basin comparisons
+if plot_figs:
+	plt.figure()
+	n = 1
+	for b in basin_q_rignot.columns:
+		plt.subplot(8, 6, n)
+		plt.title(b)
+		try:
+			plt.plot(basin_q_rignot.index, basin_q_rignot[b], 'blue')
+			plt.plot(basin_q_enderlin.index, basin_q_enderlin[b], 'red')
+			plt.plot(basin_q_rignot_sc.index, basin_q_rignot_sc[b], '--b')
+			plt.xlim('2000-01-01', '2015-12-31')
+		except KeyError:
+			# This logic means we don't see basins that only have Enderlin data
+			pass
+		n += 1
+
+
 ## Split Rignot per-basin data out to Enderlin-defined outlets using Enderlin % contributions
 # Produces a 'per-glacier' time series like Enderlin's
-# The actual point here however is to produce 1992-1999 data set 
-# which we can then use in correlation
-
-
 # We are trying to get a dataframe with glaciers=columns, years=rows
 store = []
 for basin in basin_q_rignot_sc.columns:
@@ -276,9 +292,11 @@ for basin in basin_q_rignot_sc.columns:
 	basin_q = basin_q_rignot_sc.loc[:, basin]
 
 	# Check to see if Enderlin has measurement in this basin
-	if basin in glacier_basin_contrib.columns:
+	#if basin in glacier_basin_contrib.columns:
+	if basin in glacier_basin_contrib.basin.tolist():
 		# Extract % contributions
-		contribs = glacier_basin_contrib.T.loc[basin, :]
+		#contribs = glacier_basin_contrib.T.loc[basin, :]
+		contribs = glacier_basin_contrib[glacier_basin_contrib.basin == basin]
 		# Remove all glaciers which do not contribute
 		contribs = contribs[contribs.notnull()]
 		print(contribs)
@@ -286,22 +304,260 @@ for basin in basin_q_rignot_sc.columns:
 		glacier_q = []
 		for year, y_q in basin_q.iteritems():
 			# Contribution of each glacier for one year
-			g_y_q = (100 / y_q) *  contribs
+			g_y_q = (y_q / 100) *  contribs.contrib
 			g_y_q.name = year
 			glacier_q.append(g_y_q)
 		# Dataframe with cols=glaciers, rows=years
 		glaciers_ts = pd.DataFrame(glacier_q)	
 		store.append(glaciers_ts)	
+
+	# Retain basin as an outflow in its own right
 	else:
-		# Retain basin as an outflow in its own right
 		store.append(basin_q)
 
 glaciers_rignot_sc = pd.concat(store, axis=1)
 glaciers_rignot_sc = glaciers_rignot_sc.dropna(axis=1, how='all')
 
-# Next step here is to replace Rignot values with Enderlin from 2000 onward.
+
+## Replace Rignot values with King or Enderlin from 2000 onward.
+from copy import deepcopy
+glaciers_combined = deepcopy(glaciers_rignot_sc)
+glaciers_combined = glaciers_combined.reindex(pd.date_range('1958-01-01', '2015-01-01', freq='AS'))
+for glacier in glaciers_rignot_sc.columns:
+	# Insert King data where possible, 2000:2015
+	if glacier in king.columns: ## Not using the correct names at the moment!
+		glaciers_combined.loc['2000':'2015', glacier] = king_annual_glacier_flux[glacier]
+		pass
+	# Otherwise insert Enderlin data where it exists
+	elif glacier in enderlin.columns:
+		glaciers_combined.loc['2000':'2012', glacier] = enderlin[glacier]
 
 
+## Enderlin measured a few extra glaciers (basins) not in Rignot - add them in
+# E.g. 'basin51' near Thule is identified in Rignot shapefile, but Rignot does
+# not provide any discharge estimates for the basin.
+# At time of this comment, all these only_enderlin glaciers are in basins 51, 52.
+only_enderlin = []
+for glacier in enderlin.columns:
+	if glacier not in glaciers_combined.columns:
+		glaciers_combined = pd.concat((glaciers_combined, enderlin[glacier]), axis=1)
+		only_enderlin.append(enderlin[glacier])
+# Need to double-check for accidental duplicates		
+
+
+## Optional visualisation of results so far...
+# Load Jonathan's 2012 paper values for comparison
+vals2012 = pd.read_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/Annual_fluxes_2012paper.txt',
+	names=['Runoff', 'Tundra', 'Discharge', 'Total'], delim_whitespace=True)
+vals2012.index = pd.date_range('1958-01-01', '2010-01-01', freq='1AS')
+
+# Get only the rignot 'glaciers' which Enderlin has data for
+rignot_only_enderlin = glaciers_rignot_sc.filter(items=enderlin.columns)
+
+if plot_figs:
+	plt.figure()
+	plt.plot(glaciers_combined.index, glaciers_combined.sum(axis=1), linewidth=4, marker='s', label='Combined (Rignot.Sc, Enderlin, King)', alpha=0.6)
+	plt.plot(basin_q_rignot.index, basin_q_rignot.sum(axis=1), marker='x', label='Rignot', alpha=0.6)
+	plt.plot(glaciers_rignot_sc.index, glaciers_rignot_sc.sum(axis=1), marker='+', label='Rignot scaled (all glaciers)', alpha=0.6)
+	plt.plot(enderlin.index, enderlin.sum(axis=1), marker='^', label='Enderlin', alpha=0.6)
+	plt.plot(rignot_only_enderlin.index, rignot_only_enderlin.sum(axis=1), marker='x', label='Rignot scaled (only for Enderlin glaciers)', alpha=0.6)
+	plt.plot(vals2012.index, vals2012.Discharge, marker='*', label='Bamber2012', alpha=0.6)
+	plt.legend()
+
+
+## Correlation with ice-sheet-wide runoff
+
+# Load runoff
+runoff = xr.open_dataset('/scratch/process/RACMO2.3_GRN11_runoff_monthly_1958-2015_pstere.nc')
+
+# Load mask (as we're only interested in Greenland for this analysis)
+masks = xr.open_dataset('/scratch/process/RACMO2.3_GRN11_masks_pstere.nc')
+GrIS_mask = masks.GrIS_mask
+
+# Convert from mm w.e. to km3
+runoff_flux = runoff.runoff * (5*5) / 1.0e6
+annual_runoff = runoff_flux \
+	.where(GrIS_mask) \
+	.resample('1AS', dim='TIME', how='sum') \
+	.sum(dim=('X', 'Y')) \
+	.to_pandas()
+
+# Running 5y average (y and previous 4 y)
+# Set min_periods=1 so that 1958 retains a value, as we also have solid ice Q this year
+runoff_5y = annual_runoff.rolling(5, min_periods=1).mean()
+
+# Combine, and remove zero discharge values
+runoff_discharge = pd.DataFrame({'runoff':runoff_5y, 'discharge':glaciers_combined.sum(axis=1)})
+runoff_discharge[runoff_discharge.discharge == 0] = np.nan
+runoff_discharge = runoff_discharge.dropna()
+# don't use king values as they don't capture all discharge
+runoff_discharge = runoff_discharge[:'2012']
+
+# Define and fit model
+X = runoff_discharge.runoff
+y = runoff_discharge.discharge
+X = sm.add_constant(X)
+model = sm.OLS(y, X)
+results = model.fit()
+print(results.summary())
+
+if plot_figs:
+	plt.figure()
+	runoff_discharge.plot(kind='scatter', x='runoff', y='discharge', marker='x', color='k')
+	plt.plot(runoff_discharge.runoff, results.fittedvalues, '-b')
+
+
+# # try a rignot-only, a la Bamber 2012:
+# # we wouldn't expect precise match as Rignot values have been scaled by Enderlin's...
+# runoff_discharge_r = pd.DataFrame({'runoff':runoff_5y, 'discharge':basin_q_rignot.sum(axis=1)})
+# runoff_discharge_r[runoff_discharge_r.discharge == 0] = np.nan
+# runoff_discharge_r = runoff_discharge_r.dropna()
+# X = runoff_discharge_r.runoff
+# y = runoff_discharge_r.discharge
+# X = sm.add_constant(X)
+# model = sm.OLS(y, X)
+# results = model.fit()
+# print(results.summary())
+
+# # check correlation of bamber d/s
+# X = vals2012.Runoff.rolling(5, min_periods=1).mean()
+# y = vals2012.Discharge
+# X = sm.add_constant(X)
+# model = sm.OLS(y, X)
+# results = model.fit()
+# print(results.summary())
+
+
+
+
+# Errors for correlation / sigma values??
+
+# Estimate whole time series solid ice discharge back in time
+sid_est = results.predict(exog=sm.add_constant(runoff_5y))
+sid = deepcopy(sid_est)
+sid[runoff_discharge.index] = runoff_discharge.discharge
+
+if plot_figs:
+	plt.figure()
+	sid_est.plot(label='estimated')
+	sid.plot(label='estimated+observed')
+	sid.rolling(5, min_periods=1).mean().plot(label='e+o 5y')
+	vals2012.Discharge.rolling(5, min_periods=1).mean().plot(label='Bamber2012')
+	plt.legend()
+	plt.ylim(160, 1250)
+
+
+## Attribute ice-sheet-wide solid ice discharge to specific glaciers, using monthly contrib
+
+# Rather than going via basin, we want to split into individual glaciers 
+# directly, so we have some trickery to do...
+mean_q = glaciers_combined.loc['2000':'2012'].mean()
+perc_q = (1. / mean_q.sum()) * mean_q
+# Distribute annual flux over all glaciers
+sid_glaciers = sid.apply(lambda row: row * perc_q)
+sid_glaciers[glaciers_combined.notnull()] = glaciers_combined
+
+# We now have an annual-resolution time series for individual glaciers 1958-2012
+# Values for 2013-2015 are not yet correct.
+
+
+## Estimate solid ice discharge forward in time (up to 2015)
+"""
+First deal with non-King outlets. Drop them from percentage contribs look up
+and then use remaining glaciers to allocate flux.
+Then essentially allocate the rest of the flux by adding King outlets back on.
+
+The underlying rationale here is that we know the %contrib which each King 
+outlet makes based on our analysis above. This approach doesn't preserve the 
+mass of the modelled ice-sheet-wide SID for 2013 to 2015 but DOES preserve the
+mass output by the King outlets.
+"""
+perc_q_remaining = perc_q.drop(labels=king_annual_glacier_flux.columns)
+sid_1315 = sid['2013':'2015'].apply(lambda row: row * perc_q_remaining)
+# Here we bash the King estimates on...not strictly needed as we fill these data in below, monthly.
+sid_1315 = pd.concat((sid_1315, king_annual_glacier_flux['2013':'2015']), axis='columns')
+
+sid_glaciers = sid_glaciers.drop(labels=pd.date_range('2013-01-01', '2015-01-01', freq='AS'), axis=0)
+sid_glaciers = pd.concat((sid_glaciers, sid_1315))
+
+
+## Now convert to monthly time series...
+
+# First forward fill the annual values onto monthly
+sid_glaciers_monthly = sid_glaciers.resample('1MS').ffill()
+# Currently ends on 2015-01-01, push out to 2015-12-01 
+sid_glaciers_monthly = sid_glaciers_monthly \
+	.reindex(pd.date_range('1958-01-01', '2015-12-01', freq='1MS')) \
+	.fillna(method='ffill')
+
+# For non-king glaciers, now calculate average %contrib a month from King series
+monthly_dist = monthly_perc.groupby(monthly_perc.index.month).mean().mean(axis=1) / 100
+# Apply this scaling to the annual values
+sid_glaciers_monthly_generic = sid_glaciers_monthly
+	.drop(labels=monthly_flux.columns, axis=1) \
+	.apply(lambda row: monthly_dist.loc[row.name.month] * row, axis=1)
+
+# Step 2: apply monthly glacier-specific distribution (pre-2000) or flux (2000+)
+glac_monthly = monthly_perc.groupby(monthly_perc.index.month).mean() / 100
+sid_glaciers_monthly_king = {}
+for glacier in monthly_flux.columns:
+	store = []
+	for ix, val in sid_glaciers_monthly[glacier].iteritems():
+		if ix < pd.datetime(2000, 1, 1):
+			# Apply the mean monthly distribution to the runoff-estimated value
+			store.append(glac_monthly[glacier].loc[ix.month] * val)
+		else:
+			# Insert the real data from the King dataset
+			store.append(monthly_flux.loc[ix, glacier])
+	sid_glaciers_monthly_king[glacier] = pd.Series(store, index=sid_glaciers_monthly_generic.index, name=glacier)
+
+# Now concatenate King and non-King glaciers back into a single dataframe
+sid_glaciers_monthly = pd.concat((sid_glaciers_monthly_generic, pd.DataFrame(sid_glaciers_monthly_king)), axis=1)
+
+# Calculate final annual dataset
+sid_glaciers_annual = sid_glaciers_monthly.resample('1AS').sum()
+
+
+if plot_figs:
+	plt.figure()
+	plt.plot(glaciers_combined.index, glaciers_combined.sum(axis=1), linewidth=4, marker='s', label='Combined (Rignot.Sc, Enderlin, King)', alpha=0.6)
+	plt.plot(basin_q_rignot.index, basin_q_rignot.sum(axis=1), marker='x', label='Rignot', alpha=0.6)
+	plt.plot(glaciers_rignot_sc.index, glaciers_rignot_sc.sum(axis=1), marker='+', label='Rignot scaled (all glaciers)', alpha=0.6)
+	plt.plot(enderlin.index, enderlin.sum(axis=1), marker='^', label='Enderlin', alpha=0.6)
+	plt.plot(rignot_only_enderlin.index, rignot_only_enderlin.sum(axis=1), marker='x', label='Rignot scaled (only for Enderlin glaciers)', alpha=0.6)
+	plt.plot(vals2012.index, vals2012.Discharge, marker='*', label='Bamber2012', alpha=0.6)
+	plt.plot(sid_glaciers_annual.index, sid_glaciers_annual.sum(axis=1), marker='*', label='final monthly agg. to annual', alpha=0.6)
+	plt.legend()
+
+
+
+
+
+# Add in monthly data at some point!!
+# Remember that monthly is only 26 glaciers worth...
+# For the other glaciers, just use the mean monthly % contrib from the 26.
+"""
+In principle it shouldn't matter whether correlation is done before or after
+adding in monthly data, but King data are slightly different to Enderlin so
+we should insert the King data prior to correlation.
+
+Could actually just insert annual King data initially, rather than monthly?
+
+Then do correlation.
+
+And only then create the monthly time series, which requires inserting
+King data for known locations, and splitting by perc contributions for the rest.
+
+"""
+
+# Need to generate a complete coordinate series of all glacier outlet points
+
+# What to do about basins that only have Enderlin values?
+# Basins which only have Rignot are quite easy as Rignot goes back to 1992. (although what about forward?)
+
+
+
+# Then can calculate ice-sheet wide Q 1992-2015 and produce correlation with runoff.
 
 
 # Now deal with pre-1992 data set...
