@@ -1,3 +1,15 @@
+"""
+Generates a monthly solid ice discharge time series for the Greenland Ice 
+Sheet, 1958 to 2015.
+
+Uses three datasets: Rignot, Enderlin, King. 
+- Rignot basins are scaled by Enderlin fluxes and used to provide data for 1958, 1964, 1992-1999 period.
+- Enderlin is 2000-2012 'gold standard' dataset by-glacier, annual
+- King is used to provide real monthly values where available, and otherwise to split annual fluxes into monthly by % distribution.
+
+Andrew Tedstone, May 2017.
+"""
+
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point
@@ -67,6 +79,7 @@ enderlin.columns = enderlin_cols
 
 # Enderlin glacier locations
 enderlin_locs = pd.concat([enderlin_raw[enderlin_raw.columns[0]], enderlin_raw[enderlin_raw.columns[1]]], axis=1)
+enderlin_locs = enderlin_locs.apply(pd.to_numeric, errors='ignore')
 enderlin_locs.columns = ['longitude', 'latitude']
 enderlin_locs.index = enderlin_cols
 geometry = [Point(xy) for xy in zip(enderlin_locs.longitude, enderlin_locs.latitude)]
@@ -493,7 +506,7 @@ sid_glaciers_monthly = sid_glaciers_monthly \
 # For non-king glaciers, now calculate average %contrib a month from King series
 monthly_dist = monthly_perc.groupby(monthly_perc.index.month).mean().mean(axis=1) / 100
 # Apply this scaling to the annual values
-sid_glaciers_monthly_generic = sid_glaciers_monthly
+sid_glaciers_monthly_generic = sid_glaciers_monthly \
 	.drop(labels=monthly_flux.columns, axis=1) \
 	.apply(lambda row: monthly_dist.loc[row.name.month] * row, axis=1)
 
@@ -517,6 +530,9 @@ sid_glaciers_monthly = pd.concat((sid_glaciers_monthly_generic, pd.DataFrame(sid
 # Calculate final annual dataset
 sid_glaciers_annual = sid_glaciers_monthly.resample('1AS').sum()
 
+# Export
+sid_glaciers_monthly.to_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/sid_glaciers_monthly.csv')
+
 
 if plot_figs:
 	plt.figure()
@@ -530,25 +546,10 @@ if plot_figs:
 	plt.legend()
 
 
+# Calculate an efflux point for basins (i.e. those without defined outlet glaciers)
+basins_pstere.iloc[2].geometry.exterior.coords.xy
 
 
-
-# Add in monthly data at some point!!
-# Remember that monthly is only 26 glaciers worth...
-# For the other glaciers, just use the mean monthly % contrib from the 26.
-"""
-In principle it shouldn't matter whether correlation is done before or after
-adding in monthly data, but King data are slightly different to Enderlin so
-we should insert the King data prior to correlation.
-
-Could actually just insert annual King data initially, rather than monthly?
-
-Then do correlation.
-
-And only then create the monthly time series, which requires inserting
-King data for known locations, and splitting by perc contributions for the rest.
-
-"""
 
 # Need to generate a complete coordinate series of all glacier outlet points
 
