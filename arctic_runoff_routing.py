@@ -250,12 +250,64 @@ Masks to include in this product:
 * Ocean basins
 """
 
-# NC Conventions need to be sorted
-coords = {'TIME':dates, 'Y':runoff.Y, 'X':runoff.X}
-routed_runoff_ice = xr.DataArray(store_ice, coords=coords, dims=['TIME', 'Y', 'X'], encoding={'dtype':np.dtype('Float32')})
-routed_runoff_tundra = xr.DataArray(store_tundra, coords=coords, dims=['TIME', 'Y', 'X'], encoding={'dtype':np.dtype('Float32')})
-ds = xr.Dataset({'runoff_ice':routed_runoff_ice, 'runoff_tundra':routed_runoff_tundra})
-ds.to_netcdf('/home/at15963/Dropbox/RACMO23_routed_1958_2015.nc', format='NetCDF4')
+#routed_old = xr.open_dataset('~/Dropbox/RACMO23_routed_1958_2015.nc')
+#store_ice = routed_old.runoff_ice.to_masked_array()
+#store_tundra = routed_old.runoff_tundra.to_masked_array()
+
+coords = {'TIME':runoff.TIME, 'Y':runoff.Y, 'X':runoff.X}
+
+da_ice = xr.DataArray(np.round(store_ice, 2) * 100, 
+	coords=coords, 
+	dims=['TIME', 'Y', 'X'], 
+	encoding={'dtype':'int16', 'scale_factor':0.01, 'zlib':True})
+da_ice.name = 'Ice sheet runoff'
+da_ice.attrs['long_name'] = 'Ice sheet runoff'
+da_ice.attrs['units'] = 'km3'
+da_ice.attrs['grid_mapping'] = 'polar_stereographic'
+
+da_tundra = xr.DataArray(np.round(store_tundra, 2) * 100, 
+	coords=coords, 
+	dims=['TIME', 'Y', 'X'], 
+	encoding={'dtype':'int16', 'scale_factor':0.01, 'zlib':True})
+da_tundra.name = 'Tundra runoff'
+da_tundra.attrs['long_name'] = 'Tundra runoff'
+da_tundra.attrs['units'] = 'km3'
+da_tundra.attrs['grid_mapping'] = 'polar_stereographic'
+
+ds = xr.Dataset({'runoff_ice':da_ice, 
+	'runoff_tundra':da_tundra,
+	'lon':runoff.lon,
+	'lat':runoff.lat,
+	'polar_stereographic':runoff.polar_stereographic})
+
+# Main metadata
+ds.attrs['Conventions'] = 'CF-1.4'
+ds.attrs['history'] = 'This NetCDF generated using bitbucket atedstone/fwf/arctic_runoff_routing.py using data output by fwf/reproject_racmo.py\n' + runoff.history
+ds.attrs['institution'] = 'University of Bristol (Andrew Tedstone)'
+ds.attrs['title'] = 'Monthly ice sheet and tundra runoff routed to coastal pixels'
+
+# Additional geo-referencing
+ds.attrs['nx'] = float(dempits.nx)
+ds.attrs['ny'] = float(dempits.ny)
+ds.attrs['xmin'] = float(np.round(np.min(runoff.X), 0))
+ds.attrs['ymax'] = float(np.round(np.max(runoff.Y), 0))
+ds.attrs['spacing'] = 5000.
+
+# NC conventions metadata for dimensions variables
+ds.X.attrs['units'] = 'meters'
+ds.X.attrs['standard_name'] = 'projection_x_coordinate'
+ds.X.attrs['point_spacing'] = 'even'
+ds.X.attrs['axis'] = 'X'
+
+ds.Y.attrs['units'] = 'meters'
+ds.Y.attrs['standard_name'] = 'projection_y_coordinate'
+ds.Y.attrs['point_spacing'] = 'even'
+ds.Y.attrs['axis'] = 'Y'
+
+ds.TIME.attrs['standard_name'] = 'time'
+ds.TIME.attrs['axis'] = 'TIME'
+
+ds.to_netcdf('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/FWF17_runoff.nc', format='NetCDF4')
 
 pre = pd.Series(ice_r_pre, index=dates)
 pre.to_csv(PROCESS_DIR + 'runoff_monthly_totals_pre_routing.csv')
