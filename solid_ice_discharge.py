@@ -17,7 +17,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import xarray as xr
 import statsmodels.api as sm
-
+from scipy import spatial
 import georaster
 
 pstere = {'init':'epsg:3413'}
@@ -191,7 +191,7 @@ basins_pstere = rignot_basins.to_crs(pstere)
 basins_pstere.columns = ['GRIDCODE', 'area', 'geometry', 'basin']
 
 
-## Resolve Ellyns' individual outlet glaciers into their Rignot basins
+## Resolve Enderlin individual outlet glaciers into their Rignot basins
 # First do a spatial join, based on glacier point *within* basin poly
 enderlin_names_basins = gpd.sjoin(enderlin_pstere, basins_pstere, how='left', op='within')
 
@@ -473,7 +473,6 @@ sid_glaciers[glaciers_combined.notnull()] = glaciers_combined
 # We now have an annual-resolution time series for individual glaciers 1958-2012
 # Values for 2013-2015 are not yet correct.
 
-
 ## Estimate solid ice discharge forward in time (up to 2015)
 """
 First deal with non-King outlets. Drop them from percentage contribs look up
@@ -530,10 +529,6 @@ sid_glaciers_monthly = pd.concat((sid_glaciers_monthly_generic, pd.DataFrame(sid
 # Calculate final annual dataset
 sid_glaciers_annual = sid_glaciers_monthly.resample('1AS').sum()
 
-# Export
-sid_glaciers_monthly.to_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/sid_glaciers_monthly.csv')
-
-
 if plot_figs:
 	plt.figure()
 	plt.plot(glaciers_combined.index, glaciers_combined.sum(axis=1), linewidth=4, marker='s', label='Combined (Rignot.Sc, Enderlin, King)', alpha=0.6)
@@ -546,53 +541,132 @@ if plot_figs:
 	plt.legend()
 
 
-# Calculate an efflux point for basins (i.e. those without defined outlet glaciers)
-basins_pstere.iloc[2].geometry.exterior.coords.xy
+# Define efflux points for remaining basins
+# These were picked manually using combined.shp in QGIS for guidance
+store = {}
+store['basin18'] = [-266731.308, -2711727.904]
+store['basin2'] = [-84384.416, -908161.157]
+store['basin3'] = [-4775.744, -911388.535]
+store['basin35'] = [338940.078, -972708.729]
+store['basin4'] = [279771.470, -881804.231]
+xtra_basin_locs = pd.DataFrame(store).T
+xtra_basin_locs.columns = ['x', 'y']
+geometry = [Point(xy) for xy in zip(xtra_basin_locs.x, xtra_basin_locs.y)]
+xtra_basins = gpd.GeoDataFrame({'enderlin_name':xtra_basin_locs.index}, geometry=geometry, crs=pstere)
+
+
+## Prepare coordinates for export
+complete_outlet_points = pd.concat([enderlin_pstere, xtra_basins], axis=0, ignore_index=True)
+complete_outlet_points.index = complete_outlet_points.enderlin_name
+complete_outlet_points_geo = complete_outlet_points.to_crs({'init':'epsg:4326'})
+# First sort alphabetically
+complete_outlet_points_geo = complete_outlet_points_geo.sort_index(axis=0)
+row_x = [r.x for r in complete_outlet_points_geo.geometry]
+row_y = [r.y for r in complete_outlet_points_geo.geometry]
+coords_df = pd.DataFrame(np.array([np.array(row_x), np.array(row_y)]), 
+	index=['longitude_degrees', 'latitude_degrees'], 
+	columns=complete_outlet_points_geo.index.values)
+
+## Export CSV (glacier-by-glacier)
+# First sort alphabetically
+sid_glaciers_monthly = sid_glaciers_monthly.reindex_axis(sorted(sid_glaciers_monthly.columns), axis=1)
+# Add lat/lon rows to top of frame
+to_export = pd.concat((coords_df, sid_glaciers_monthly), axis=0)
+# Export, to 1dp inline with source datasets
+to_export.to_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/sid_glaciers_monthly_coords.csv',
+	float_format='%.1f', date_format='%Y-%m-%d')
 
 
 
-# Need to generate a complete coordinate series of all glacier outlet points
+### ==========================================================================
+### Gridding
+## The initial distance lookups are copied from arctic_runoff_routing.py
 
-# What to do about basins that only have Enderlin values?
-# Basins which only have Rignot are quite easy as Rignot goes back to 1992. (although what about forward?)
+## Create look-up tree of coastline pixels
+# Load the 'distance from the ocean' raster
+dist_land = georaster.SingleBandRaster('/scratch/process/ROUTING_distances_landandice.tif')
+coast = np.where(dist_land.r == 1, 1, 0)
+
+# In pixel space, create a 2-d array of coastline pixels
+x = np.arange(0, dist_land.nx)
+y = np.arange(0, dist_land.ny)
+xi, yi = np.meshgrid(x, y)
+xp = xi[np.where(coast == 1, True, False)].flatten()
+yp = yi[np.where(coast == 1, True, False)].flatten()
+coast_points = np.zeros((len(xp), 2))
+coast_points[:, 0] = yp
+coast_points[:, 1] = xp
+
+# Create the coast lookup tree
+tree = spatial.cKDTree(coast_points)
+
+# Do grid lookup operations using DEM
+dem_uri = '/scratch/process/dem_ice_racmo_EPSG3413_5km.tif'
+dem = georaster.SingleBandRaster(dem_uri, load_data=False)
+
+sid_grid = np.zeros((len(sid_glaciers_monthly), dem.ny, dem.nx))
+
+# Use 1dp rounded version of dataset
+sid_glaciers_monthly_round = round(sid_glaciers_monthly)
+
+# Add SID from each location in turn
+for ix, row in complete_outlet_points.iterrows():
+	# First convert to pixel coordinates
+	x_px, y_px = dem.coord_to_px(row['geometry'].x, row['geometry'].y)
+	# Now find nearest coastal pixel
+	distance, index = tree.query((y_px, x_px), k=1)
+	cpy, cpx = coast_points[index, :]
+	# Some outlets discharge within same 5 km pixel, hence +=
+	sid_grid[:, int(cpy), int(cpx)] += sid_glaciers_monthly_round[row['enderlin_name']]
+
+
+## Convert to netCDF
+# Open runoff to easily get coords info
+runoff = xr.open_dataset('/scratch/process/RACMO2.3_GRN11_runoff_monthly_1958-2015_pstere.nc')
+coords = {'TIME':runoff.TIME, 'Y':runoff.Y, 'X':runoff.X}
+# Convert to DataArray, integer (hence scaling, following on from 1dp rounding above)
+sid = xr.DataArray(sid_grid * 10, coords=coords, dims=['TIME', 'Y', 'X'],
+	encoding={'dtype':'int16', 'scale_factor':0.1, 'zlib':True})
+sid.name = 'Solid ice discharge'
+sid.attrs['long_name'] = 'Solid ice discharge'
+sid.attrs['units'] = 'km3'
+sid.attrs['grid_mapping'] = 'polar_stereographic'
+
+ds = xr.Dataset({'solid_ice':sid, 'lon':runoff.lon, 'lat':runoff.lat, 
+	'polar_stereographic':runoff.polar_stereographic})
+
+# Main metadata
+ds.attrs['Conventions'] = 'CF-1.4'
+ds.attrs['history'] = 'This NetCDF generated using bitbucket atedstone/fwf/solid_ice_discharge.py using data provided by Eric Rignot, Ellyn Enderlin and Michalea King'
+ds.attrs['institution'] = 'University of Bristol (Andrew Tedstone)'
+ds.attrs['title'] = 'Monthly solid ice discharge from Greenland on a projected grid'
+
+# Additional geo-referencing
+ds.attrs['nx'] = float(dem.nx)
+ds.attrs['ny'] = float(dem.ny)
+ds.attrs['xmin'] = float(np.round(np.min(runoff.X), 0))
+ds.attrs['ymax'] = float(np.round(np.max(runoff.Y), 0))
+ds.attrs['spacing'] = 5000.
+
+# NC conventions metadata for dimensions variables
+ds.X.attrs['units'] = 'meters'
+ds.X.attrs['standard_name'] = 'projection_x_coordinate'
+ds.X.attrs['point_spacing'] = 'even'
+ds.X.attrs['axis'] = 'X'
+
+ds.Y.attrs['units'] = 'meters'
+ds.Y.attrs['standard_name'] = 'projection_y_coordinate'
+ds.Y.attrs['point_spacing'] = 'even'
+ds.Y.attrs['axis'] = 'Y'
+
+ds.TIME.attrs['standard_name'] = 'time'
+ds.TIME.attrs['axis'] = 'TIME'
+
+ds.to_netcdf('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/FWF17_solidice.nc', format='NetCDF4')
 
 
 
-# Then can calculate ice-sheet wide Q 1992-2015 and produce correlation with runoff.
-
-
-# Now deal with pre-1992 data set...
-## Take a very similar approach with annual Q estimates from correlation
-# but rather than thinking in basin terms, just attribute direct to each outlet
-# some outlets also have their own seasonal cycle to consider (c.f. King)
-
-
-
-
-
-
-"""
-Next steps here:
-finish up association of Rignot glaciers with Enderlin
- 	- see QGIS file
-compare Rignot and Enderlin, remove magnitude difference
-for each glacier, create complete time series of Rignot-Enderlin-King
-for coordinates of each glacier use Enderlin (at least as far as possible)
-correlate annual spatial mean of entire time series with runoff
-Use correlation to extend discharge time series
-	- for temporal (monthly) distn use the monthly percentage calculated from the King dataset
-	- not yet sure how to to distribute total annual pre-92 discharge spatially?
-"""	
-
-
-
-
-
-# joined = gpd.sjoin(enderlin_geo, king_geo, how='right', op='within')
-
-# len(joined)
-
-
+##############################################################################
 
 # # Compare the King and Enderlin datasets for common glaciers
 # king_annual_glacier_flux = monthly_flux.resample('1AS').sum()
@@ -601,21 +675,6 @@ Use correlation to extend discharge time series
 # 	plt.title(ne)
 # 	plt.plot(enderlin.index, enderlin[ne], 'r')
 # 	plt.plot(king_annual_glacier_flux.index, king_annual_glacier_flux[nk], 'b')	
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
