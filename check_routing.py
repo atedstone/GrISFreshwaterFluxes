@@ -30,11 +30,12 @@ routed.runoff_tundra \
 
 
 # Check ice runoff from GrIS
-unrouted.runoff \
-	.sel(TIME=slice('1958','1963')) \
+(unrouted.runoff \
+	.sel(TIME=slice('1958','1964')) \
 	.where(masks.GrIS_mask) \
 	.resample('1AS', dim='TIME', how='sum') \
-	.sum(dim=('X','Y')) * (5*5) / 1.0e6
+	.sum(dim=('X','Y')) * (5*5) / 1.0e6) \
+	.rolling(TIME=5).mean()
 
 routed.runoff_ice \
 	.sel(TIME=slice('1958','1963')) \
