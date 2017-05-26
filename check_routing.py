@@ -9,13 +9,23 @@ import xarray as xr
 masks = xr.open_dataset('/scratch/process/RACMO2.3_GRN11_masks_pstere.nc')
 unrouted = xr.open_dataset('/scratch/process/RACMO2.3_GRN11_runoff_monthly_1958-2015_pstere.nc')
 routed = xr.open_dataset('/home/at15963/Dropbox/routed_1958_1963.nc')
+routed = xr.open_dataset('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/FWF17_runoff.nc', chunks={'TIME':12})
 
 # Check GrIS-only ice runoff over 5-year mean corresponding to 2012 paper
 routed.runoff_ice \
-	.where(masks.Greenland_all) \
+	.where(masks.Greenland_all == 1) \
 	.resample('1AS', dim='TIME', how='sum') \
 	.sum(dim=('X','Y')) \
+	.load() \
 	.rolling(TIME=5) \
+	.mean()
+
+routed.runoff_ice \
+	.where(masks.Greenland_all == 1) \
+	.resample('1AS', dim='TIME', how='sum') \
+	.sum(dim=('X','Y')) \
+	.load() \
+
 	.mean()
 
 routed.runoff_tundra \
@@ -30,7 +40,7 @@ routed.runoff_tundra \
 
 
 # Check ice runoff from GrIS
-(unrouted.runoff \
+r5y_un = (unrouted.runoff \
 	.sel(TIME=slice('1958','1964')) \
 	.where(masks.GrIS_mask) \
 	.resample('1AS', dim='TIME', how='sum') \
@@ -71,3 +81,30 @@ unrouted - so won't have too much of an impact on long-term time series? Could
 check this I suppose.
 
 """
+
+
+## Do a check with original unprojected, unrouted data
+masks_geo = xr.open_dataset('/scratch/L0data/RACMO/RACMO2.3_GRN11_masks.nc')
+runoff_geo = xr.open_dataset('/scratch/L0data/RACMO/RACMO2.3_GRN11_runoff_monthly_1958-2015.nc',
+	decode_times=False, chunks={'time':12})
+# Apply time dimension in format understandable by xarray
+times = pd.date_range('1958-01-01', '2015-12-01', freq='1MS')
+runoff_geo['time'] = times
+
+r1ygeo = ((runoff_geo.runoff * masks_geo.gridarea.values / 1.0e6) \
+	.where(masks_geo.GrIS_mask.values == 1) \
+	.resample('1AS', dim='time', how='sum') \
+	.sum(dim=('lon','lat')) ) \
+	.load() 
+
+brunoff = xr.open_dataset('/scratch/process/RACMO2.3_GRN11_runoff_monthly_1958-2015_bamber_TEST.nc')
+grid_proj = pyproj.Proj('+proj=sterea +lat_0=90 +lat_ts=71 +lon_0=-39 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs')
+lon = runoff_geo.LON.values.flatten()
+lat = runoff_geo.LAT.values.flatten()
+latlon = np.vstack((lat, lon)).T
+(x, y) = grid_proj(lon, lat)
+
+for x1, y1, lon1, lat1 in zip(x, y, lon, lat):
+	geo = runoff_geo.runoff.sel(lon=lon1, lat=lat1, method='nearest').values()
+	proj = brunoff.runoff.sel(x=x1, y=y1, method='nearest').values()
+	print('%s : %s' %(geo, proj))
