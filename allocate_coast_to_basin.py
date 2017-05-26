@@ -54,7 +54,7 @@ for (y, x), (lon, lat) in zip(coast_points, ll_coast_points):
 	distances = iho_arctic.distance(p)
 	idx = distances.idxmin()
 	basins.append(idx)
-	basins_raster[y, x] = idx
+	basins_raster[int(y), int(x)] = idx
 
 basin_desc = ''
 for b in iho_arctic.iterrows():
@@ -66,7 +66,7 @@ metadata = { 'basins':basin_desc, 'history':history, 'author':author }
 
 ## Save basins raster
 georaster.simple_write_geotiff(
-	'/scratch/process/outflow_basins.tif',
+	'/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/outflow_basins.nc',
 	basins_raster, 
 	dist_land.trans,
 	proj4=dist_land.srs.ExportToProj4(),
