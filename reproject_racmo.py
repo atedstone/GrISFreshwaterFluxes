@@ -1,4 +1,11 @@
 """
+
+26 May 2017: DO NOT USE!
+There are major problems with the gridding/interpolation scheme in here
+Use project_racmo.R instead!
+
+
+
 Project RACMO 2.3 data onto a regular grid using interpolation.
 Outputs an equivalent NetCDF of the time series.
 
@@ -24,6 +31,7 @@ import argparse
 import datetime as dt
 import math
 import georaster
+import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser(description='Project geographic RACMO data for Arctic domain')
 
@@ -131,7 +139,8 @@ grid_latlon_radians = grid_latlon / 57.29578
 m = 2.0 * np.tan(45.0 / 57.29578 - (grid_latlon_radians[:, 0] / 2)) / np.cos(grid_latlon_radians[:, 0]) 
 # Compute scale factor for each grid cell
 k0 = pstere_lat2k0(srs.GetProjParm('latitude_of_origin'))
-scale_factors = np.sqrt((m * k0))
+print(k0)
+scale_factors = np.power(m * k0, 2) #np.sqrt((m * k0))
 # reshape scale_factors to the same dimensions as the grid
 scale_factors = scale_factors.reshape(xi.shape)
 
@@ -165,6 +174,13 @@ for t in process_times:
 
 	# Interpolate point data onto grid
 	zi = interpolate.griddata(xy, r, (xi, yi), method='linear')
+	# plt.figure()
+	# plt.imshow(zi, origin='lower')
+	# plt.colorbar()
+	# plt.show()
+	# CHECK:  lookup the values of geo coords in the new grid!!
+
+	print(np.mean(zi))
 
 	# Apply scale_factor
 	zi_sf = zi / scale_factors
@@ -271,14 +287,25 @@ ds.to_netcdf(PROCESS_DIR + fn_save,	format='NETCDF4')
 ## Do some simple checks if projecting the bamber grid (as per used in 2012 paper)
 
 if args.grid == 'bamber':
+
 	# To create this file, use Williams mc_land_mask___bamber_proj.tif:
 	# gdalwarp -tr 5000 5000 -te -800000 -3400000 700000 -600000 mc_land_mask___bamber_proj.tif mc_land_mask___bamber_proj_5km.tif
 	mask = georaster.SingleBandRaster('/scratch/bedmachine/mc_land_mask___bamber_proj_5km.tif')
-	ice_area = np.where(mask.r == 2, True, False)
+	ice_area = np.where(mask.r == 2, 1, 0)
+
+	#print((np.sum(store[0:12, :, :] * np.flipud(ice_area)) * (5*5)/1.0e6))
 
 	# Bamber's value for gridded product stated as 242.888 km^3 in Interpolate_racmo.BAK
 	print('1958 runoff flux:')
-	print(((ds.runoff.sel(TIME=slice('1958-01-01','1958-12-01')) * np.flipud(ice_area)) * (5*5) / 1.0e6).sum())
+	r1958 = ((ds.runoff.sel(TIME=slice('1958-01-01','1958-12-01')) * np.flipud(ice_area)) * (5*5) / 1.0e6)
+	print(r1958.sum())
+
+	plt.figure()
+	r1958.sum(dim='TIME').plot()
+
+	plt.figure()
+	(ds.runoff.sel(TIME=slice('1958-01-01','1958-12-01')) * (5*5) / 1.0e6).sum(dim='TIME').plot()
+	plt.show()
 
 
 
