@@ -21,7 +21,9 @@ import xarray as xr
 import pandas as pd
 from scipy import spatial 
 import os
-from osgeo import gdal
+from osgeo import gdal, osr
+import math
+from scipy.ndimage import morphology as sc_morph
 
 import georaster
 
@@ -30,15 +32,40 @@ debug = False
 
 PROCESS_DIR = os.environ['PROCESS_DIR']
 
+
+def pstere_lat2k0(lat):
+    """ Given lat in degrees, return k0 
+
+    Implementation of eq. 1 in:
+    Rollins, 2011. Computation of scale-factor and standard parallel for the 
+    polar stereographic projection.
+    URL: http://earth-info.nga.mil/GandG/coordsys/polar_stereographic/Polar_Stereo_phi1_from_k0_memo.pdf
+    Last retrieved 2012-Dec-07.
+
+    """
+
+    ecc = 0.0818191908426215
+    lat = np.deg2rad(70)
+    k90 = np.sqrt(np.power((1. + ecc), (1. + ecc)) * np.power((1. - ecc), (1. - ecc)))
+    k0_1 = ((1. + np.sin(lat)) / 2.) 
+    k0_2 = (k90 / np.sqrt(np.power(1. + (ecc * np.sin(lat)), (1.+ecc)) * np.power(1. - (ecc * np.sin(lat)), (1.-ecc))))
+    k0 = k0_1 * k0_2
+
+    return k0
+
 # ----------------------------------------------------------------------------
 
 ## Only use topography of ice surfaces - route to ice sheet + cap margins.
-dem_uri = PROCESS_DIR + 'dem_ice_racmo_EPSG3413_5km.tif'
-dem_sm_uri = PROCESS_DIR + 'dem_ice_sm_racmo_EPSG3413_5km.tif'
-# Set nans to zero - I think this is needed for pit filling?
+dem_uri = PROCESS_DIR + 'project_RACMO/mask_topography.tif'
+ice_mask_uri = PROCESS_DIR + 'project_RACMO/mask_icecon.tif'
+ice_mask = georaster.SingleBandRaster(ice_mask_uri)
+dem_sm_uri = PROCESS_DIR + 'topography_ice_smoothed.tif'
+## Set nans to zero - I think this is needed for pit filling?
 dem = georaster.SingleBandRaster(dem_uri)
-dem.r = np.where(np.isnan(dem.r), 0, dem.r)
-dem.save_geotiff(dem_sm_uri)
+dem_ice = georaster.SingleBandRaster.from_array(np.where(ice_mask.r == 1, dem.r, 0), ice_mask.trans,
+	ice_mask.proj.srs, gdal.GDT_Float32)
+#dem.r = np.where(np.isnan(dem.r), 0, dem.r)
+dem_ice.save_geotiff(dem_sm_uri)
 dem = None
 
 
@@ -70,8 +97,6 @@ absorp = None
 
 ## Create distance raster of ice mask in order to find ice sheet edges later
 # We are also loading the ice mask to use later in order to mask out tundra runoff
-ice_mask_uri = PROCESS_DIR + 'mask_ice_racmo_EPSG3413_5km.tif'
-ice_mask = georaster.SingleBandRaster(ice_mask_uri)
 # Grab geo-referencing, for writing out new geoTIFFs
 trans = ice_mask.trans
 proj4 = ice_mask.srs.ExportToProj4()
@@ -87,13 +112,28 @@ georaster.simple_write_geotiff(
 
 
 ## Create distance raster of land mask so we can find coast later.
-landice_mask_uri = PROCESS_DIR + 'mask_landandice_racmo_EPSG3413_5km.tif'
-landice_mask = georaster.SingleBandRaster(landice_mask_uri)
+lsm = georaster.SingleBandRaster('/scratch/process/project_RACMO/mask_LSM_noGrIS.tif')
+Gr_land = georaster.SingleBandRaster('/scratch/process/project_RACMO/mask_Gr_land.tif')
+landice_mask = georaster.SingleBandRaster.from_array(lsm.r+Gr_land.r, lsm.trans,
+	lsm.proj.srs, gdal.GDT_Byte)
+# landice_mask_uri = PROCESS_DIR + 'project_RACMO/mask_landandice_racmo_EPSG3413_5km.tif'
+# landice_mask = georaster.SingleBandRaster(landice_mask_uri)
 # Grab geo-referencing, for writing out new geoTIFFs
 trans = landice_mask.trans
 proj4 = landice_mask.srs.ExportToProj4()
+# Fill holes to make sure we reach the coast
+landice_mask_filled = sc_morph.binary_fill_holes(landice_mask.r)
+landice_mask.r = landice_mask_filled
+landice_mask.save_geotiff('/scratch/process/project_RACMO/mask_landandice_filled.tif',
+	dtype=gdal.GDT_Byte)
+# Also output Greenland-only mask (faciliates easy comparison to unrouted data)
+Gr_land_filled_r = sc_morph.binary_fill_holes(Gr_land.r)
+Gr_land_filled = georaster.SingleBandRaster.from_array(Gr_land_filled_r, lsm.trans,
+	lsm.proj.srs, gdal.GDT_Byte)
+Gr_land_filled.save_geotiff('/scratch/process/project_RACMO/mask_landandice_filled.tif',
+	dtype=gdal.GDT_Byte)
 # Get distances
-out, distances = morphology.medial_axis(landice_mask.r, return_distance=True)
+out, distances = morphology.medial_axis(landice_mask_filled, return_distance=True)
 georaster.simple_write_geotiff(
 	PROCESS_DIR + 'ROUTING_distances_landandice.tif',
 	distances,
@@ -152,8 +192,8 @@ ice_points[:, 0] = yp
 ice_points[:, 1] = xp
 
 ## Load land mask to route tundra runoff (euclidean distance)
-land_mask_uri = PROCESS_DIR + 'mask_land_racmo_EPSG3413_5km.tif'
-land_mask = georaster.SingleBandRaster(land_mask_uri)
+land_mask = georaster.SingleBandRaster.from_array((lsm.r+Gr_land.r)-ice_mask.r, lsm.trans,
+	lsm.proj.srs, gdal.GDT_Byte)
 x = np.arange(0, land_mask.nx)
 y = np.arange(0, land_mask.ny)
 xi, yi = np.meshgrid(x, y)
@@ -163,14 +203,34 @@ land_points = np.zeros((len(xp), 2))
 land_points[:, 0] = yp
 land_points[:, 1] = xp
 
+
+### Calculate scaling factors for polar stereo projection
+# We also use these grids later as nc variables lon and lat
+grid_lon, grid_lat = lsm.coordinates(latlon=True)
+# Convert to paired columns
+grid_latlon = np.vstack((grid_lat.flatten(), grid_lon.flatten())).T
+# Convert to radians
+grid_latlon_radians = grid_latlon / 57.29578
+# Calculate latitudinal scaling
+m = 2.0 * np.tan(45.0 / 57.29578 - (grid_latlon_radians[:, 0] / 2)) / np.cos(grid_latlon_radians[:, 0]) 
+# Compute scale factor for each grid cell
+k0 = pstere_lat2k0(70.)
+scale_factors = np.power(m * k0, 2)
+# reshape scale_factors to the same dimensions as the grid
+scale_factors = scale_factors.reshape(grid_lon.shape)
+
+
 ## Step 3: route monthly runoff
 # Open the gridded runoff file          
-runoff = xr.open_dataset(PROCESS_DIR + 'RACMO2.3_GRN11_runoff_monthly_1958-2015_pstere.nc')
+runoff = xr.open_dataset(PROCESS_DIR + 'project_RACMO/runoff_pstere.nc',
+	decode_times=False, chunks={'TIME':12})
+times = pd.date_range('1958-01-01', '2015-12-31', freq='1MS')
+runoff['TIME'] = times
 
 if debug == True:
-	store_ice = np.zeros((12*7, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
-	store_tundra = np.zeros((12*7, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
-	dates = pd.date_range('1958-01-01', '1964-12-01', freq='1MS')
+	store_ice = np.zeros((12*3, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
+	store_tundra = np.zeros((12*3, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
+	dates = pd.date_range('1958-01-01', '1960-12-01', freq='1MS')
 else:
 	dates = runoff.TIME.to_index()
 	store_ice = np.zeros((len(dates), ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
@@ -182,9 +242,9 @@ ice_r_post = []
 for date in dates:
 	print(date)
 	# Import runoff data grid from netcdf
-	r_month = np.flipud(runoff.runoff.sel(TIME=date).values.squeeze())
+	r_month = runoff.runoff.sel(TIME=date).values.squeeze() / scale_factors
 	# Convert mmWE to flux per grid cell
-	r_month = np.where(r_month > 0, r_month * (5*5) / 1.0e6, 0)
+	r_month = np.where(r_month > 0, r_month * (5*5) / 1.0e6, 0) 
 	# Get ice component of runoff
 	r_month_ice = np.where(ice_mask.r == 1, r_month, np.nan)
 	ice_r_pre.append(np.nansum(r_month_ice))
@@ -219,7 +279,8 @@ for date in dates:
 		coast_grid_ice[int(cpy), int(cpx)] += flux.r[int(ry), int(rx)]	
 
 	# Save coastal fluxes to store
-	store_ice[n,:,:] = np.flipud(coast_grid_ice)
+	# store_ice[n,:,:] = np.flipud(coast_grid_ice)
+	store_ice[n,:,:] = coast_grid_ice
 
 	# MUST close handle to flux file otherwise pygeoprocessing can't overwrite on next iteration
 	f = None
@@ -235,7 +296,7 @@ for date in dates:
 		coast_grid_tundra[int(cpy), int(cpx)] += r_month_tundra[int(ry), int(rx)]
 
 	# Save coastal fluxes to store
-	store_tundra[n,:,:] = np.flipud(coast_grid_tundra)
+	store_tundra[n,:,:] = coast_grid_tundra
 
 	n += 1
 
@@ -254,35 +315,70 @@ Masks to include in this product:
 #store_ice = routed_old.runoff_ice.to_masked_array()
 #store_tundra = routed_old.runoff_tundra.to_masked_array()
 
-coords = {'TIME':runoff.TIME, 'Y':runoff.Y, 'X':runoff.X}
+coords = {'TIME':dates, 'Y':runoff.Y, 'X':runoff.X}
 
-da_ice = xr.DataArray(np.round(store_ice, 2) * 100, 
+da_ice = xr.DataArray(np.round(store_ice, 2), 
 	coords=coords, 
 	dims=['TIME', 'Y', 'X'], 
-	encoding={'dtype':'int16', 'scale_factor':0.01, 'zlib':True})
+	encoding={'dtype':'int16', 'scale_factor':0.01, 'zlib':True, '_FillValue':-9999})
 da_ice.name = 'Ice sheet runoff'
 da_ice.attrs['long_name'] = 'Ice sheet runoff'
 da_ice.attrs['units'] = 'km3'
 da_ice.attrs['grid_mapping'] = 'polar_stereographic'
 
-da_tundra = xr.DataArray(np.round(store_tundra, 2) * 100, 
+da_tundra = xr.DataArray(np.round(store_tundra, 2), 
 	coords=coords, 
 	dims=['TIME', 'Y', 'X'], 
-	encoding={'dtype':'int16', 'scale_factor':0.01, 'zlib':True})
+	encoding={'dtype':'int16', 'scale_factor':0.01, 'zlib':True, '_FillValue':-9999})
 da_tundra.name = 'Tundra runoff'
 da_tundra.attrs['long_name'] = 'Tundra runoff'
 da_tundra.attrs['units'] = 'km3'
 da_tundra.attrs['grid_mapping'] = 'polar_stereographic'
 
+
+## Define projection
+srs = osr.SpatialReference()
+srs.ImportFromProj4('+init=epsg:3413')
+crs = xr.DataArray(0, encoding={'dtype':np.dtype('int8')})
+crs.attrs['grid_mapping_name'] = 'polar_stereographic'
+crs.attrs['scale_factor_at_central_origin'] = srs.GetProjParm('scale_factor')
+crs.attrs['standard_parallel'] = srs.GetProjParm('latitude_of_origin')
+crs.attrs['straight_vertical_longitude_from_pole'] = srs.GetProjParm('central_meridian')
+crs.attrs['false_easting'] = srs.GetProjParm('false_easting')
+crs.attrs['false_northing'] = srs.GetProjParm('false_northing')
+# lat_0 does not have a WKT representation for polar stereographic
+# http://cfconventions.org/wkt-proj-4.html
+# look it up from Proj4 string directly instead
+p4 = srs.ExportToProj4()
+lat_0_pos = p4.find('+lat_0=')
+lat_0 = float(p4[lat_0_pos+7:lat_0_pos+7+3].strip())
+crs.attrs['latitude_of_projection_origin'] = lat_0
+
+## Create associated lat/lon coordinates DataArrays
+coords_geo = {'Y': coords['Y'], 'X': coords['X']}
+
+lon_da = xr.DataArray(grid_lon, coords=coords_geo, dims=['Y', 'X'], 
+	encoding={'_FillValue': -9999.})
+lon_da.attrs['grid_mapping'] = 'polar_stereographic'
+lon_da.attrs['units'] = 'degrees'
+lon_da.attrs['standard_name'] = 'longitude'
+
+lat_da = xr.DataArray(grid_lat, coords=coords_geo, dims=['Y', 'X'], 
+	encoding={'_FillValue': -9999.})
+lat_da.attrs['grid_mapping'] = 'polar_stereographic'
+lat_da.attrs['units'] = 'degrees'
+lat_da.attrs['standard_name'] = 'latitude'
+
+
 ds = xr.Dataset({'runoff_ice':da_ice, 
 	'runoff_tundra':da_tundra,
-	'lon':runoff.lon,
-	'lat':runoff.lat,
-	'polar_stereographic':runoff.polar_stereographic})
+	'lon':lon_da,
+	'lat':lat_da,
+	'polar_stereographic':crs})
 
 # Main metadata
 ds.attrs['Conventions'] = 'CF-1.4'
-ds.attrs['history'] = 'This NetCDF generated using bitbucket atedstone/fwf/arctic_runoff_routing.py using data output by fwf/reproject_racmo.py\n' + runoff.history
+ds.attrs['history'] = 'This NetCDF generated using bitbucket atedstone/fwf/arctic_runoff_routing.py using data output by fwf/project_racmo.R on /scratch/L0data/RACMO/RACMO2.3_GRN11_runoff_monthly_1958-2015.nc'
 ds.attrs['institution'] = 'University of Bristol (Andrew Tedstone)'
 ds.attrs['title'] = 'Monthly ice sheet and tundra runoff routed to coastal pixels'
 
@@ -309,7 +405,7 @@ ds.TIME.attrs['axis'] = 'TIME'
 
 ds.to_netcdf('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/FWF17_runoff.nc', format='NetCDF4')
 
-pre = pd.Series(ice_r_pre, index=dates)
-pre.to_csv(PROCESS_DIR + 'runoff_monthly_totals_pre_routing.csv')
-post = pd.Series(ice_r_post, index=dates)
-post.to_csv(PROCESS_DIR + 'runoff_monthly_totals_post_routing.csv')
+# pre = pd.Series(ice_r_pre, index=dates)
+# pre.to_csv(PROCESS_DIR + 'runoff_monthly_totals_pre_routing.csv')
+# post = pd.Series(ice_r_post, index=dates)
+# post.to_csv(PROCESS_DIR + 'runoff_monthly_totals_post_routing.csv')
