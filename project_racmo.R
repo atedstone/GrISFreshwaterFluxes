@@ -86,7 +86,7 @@ writeRaster(stacked, '/scratch/process/project_RACMO/runoff_pstere.nc', overwrit
 
 ### Masks
 layers = list('LSM_noGrIS', 'icecon', 'icemask_no_GrIS', 'Gr_land', 
- 	'GrIS_mask', 'GrIS_caps_mask') 
+ 	'GrIS_mask', 'GrIS_caps_mask', 'topography') 
 
 store = vector('list', 6)
 fname_store = vector('list', 6)
@@ -97,7 +97,12 @@ for(i in 1:6){
 	mask = raster('/scratch/L0data/RACMO/RACMO2.3_GRN11_masks.nc', 
 		varname=layers[[i]])
 
-	m = project_layer(mask, round=TRUE)
+	if(layers[[i]] == 'topography'){
+		m = project_layer(mask, round=FALSE)
+	}
+	else{
+		m = project_layer(mask, round=TRUE)
+	}
 	# turn NAs to zeros
 	m[is.na(m)] = 0
 
