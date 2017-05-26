@@ -381,16 +381,17 @@ if plot_figs:
 ## Correlation with ice-sheet-wide runoff
 
 # Load runoff
-runoff = xr.open_dataset('/scratch/process/RACMO2.3_GRN11_runoff_monthly_1958-2015_pstere.nc')
+runoff = xr.open_dataset('/scratch/process/project_RACMO/runoff_pstere.nc')
 
 # Load mask (as we're only interested in Greenland for this analysis)
-masks = xr.open_dataset('/scratch/process/RACMO2.3_GRN11_masks_pstere.nc')
-GrIS_mask = masks.GrIS_mask
+#masks = xr.open_dataset('/scratch/process/RACMO2.3_GRN11_masks_pstere.nc')
+#GrIS_mask = masks.GrIS_mask
+GrIS_mask = georaster.SingleBandRaster('/scratch/process/project_RACMO/mask_GrIS_mask.tif')
 
 # Convert from mm w.e. to km3
 runoff_flux = runoff.runoff * (5*5) / 1.0e6
 annual_runoff = runoff_flux \
-	.where(GrIS_mask) \
+	.where(GrIS_mask.r) \
 	.resample('1AS', dim='TIME', how='sum') \
 	.sum(dim=('X', 'Y')) \
 	.to_pandas()
@@ -600,11 +601,8 @@ coast_points[:, 1] = xp
 # Create the coast lookup tree
 tree = spatial.cKDTree(coast_points)
 
-# Do grid lookup operations using DEM
-dem_uri = '/scratch/process/dem_ice_racmo_EPSG3413_5km.tif'
-dem = georaster.SingleBandRaster(dem_uri, load_data=False)
 
-sid_grid = np.zeros((len(sid_glaciers_monthly), dem.ny, dem.nx))
+sid_grid = np.zeros((len(sid_glaciers_monthly), dist_land.ny, dist_land.nx))
 
 # Use 1dp rounded version of dataset
 sid_glaciers_monthly_round = round(sid_glaciers_monthly)
@@ -622,10 +620,10 @@ for ix, row in complete_outlet_points.iterrows():
 
 ## Convert to netCDF
 # Open runoff to easily get coords info
-runoff = xr.open_dataset('/scratch/process/RACMO2.3_GRN11_runoff_monthly_1958-2015_pstere.nc')
+runoff = xr.open_dataset('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/FWF17_runoff.nc')
 coords = {'TIME':runoff.TIME, 'Y':runoff.Y, 'X':runoff.X}
 # Convert to DataArray, integer (hence scaling, following on from 1dp rounding above)
-sid = xr.DataArray(sid_grid * 10, coords=coords, dims=['TIME', 'Y', 'X'],
+sid = xr.DataArray(sid_grid, coords=coords, dims=['TIME', 'Y', 'X'],
 	encoding={'dtype':'int16', 'scale_factor':0.1, 'zlib':True})
 sid.name = 'Solid ice discharge'
 sid.attrs['long_name'] = 'Solid ice discharge'
