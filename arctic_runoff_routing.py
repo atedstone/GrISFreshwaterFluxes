@@ -130,7 +130,7 @@ landice_mask.save_geotiff('/scratch/process/project_RACMO/mask_landandice_filled
 Gr_land_filled_r = sc_morph.binary_fill_holes(Gr_land.r)
 Gr_land_filled = georaster.SingleBandRaster.from_array(Gr_land_filled_r, lsm.trans,
 	lsm.proj.srs, gdal.GDT_Byte)
-Gr_land_filled.save_geotiff('/scratch/process/project_RACMO/mask_landandice_filled.tif',
+Gr_land_filled.save_geotiff('/scratch/process/project_RACMO/mask_Gr_land_filled.tif',
 	dtype=gdal.GDT_Byte)
 # Get distances
 out, distances = morphology.medial_axis(landice_mask_filled, return_distance=True)
