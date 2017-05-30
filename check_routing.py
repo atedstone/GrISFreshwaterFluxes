@@ -103,8 +103,3 @@ lon = runoff_geo.LON.values.flatten()
 lat = runoff_geo.LAT.values.flatten()
 latlon = np.vstack((lat, lon)).T
 (x, y) = grid_proj(lon, lat)
-
-for x1, y1, lon1, lat1 in zip(x, y, lon, lat):
-	geo = runoff_geo.runoff.sel(lon=lon1, lat=lat1, method='nearest').values()
-	proj = brunoff.runoff.sel(x=x1, y=y1, method='nearest').values()
-	print('%s : %s' %(geo, proj))
