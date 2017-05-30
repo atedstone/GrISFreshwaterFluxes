@@ -46,15 +46,20 @@ coast_points = np.zeros((len(xp), 2))
 coast_points[:, 0] = yp
 coast_points[:, 1] = xp
 
-basins = []
 basins_raster = np.zeros((dist_land.ny, dist_land.nx))
+print(len(coast_points))
+print(len(ll_coast_points))
+i = 0
 for (y, x), (lon, lat) in zip(coast_points, ll_coast_points):
 
 	p = Point(lon, lat)
 	distances = iho_arctic.distance(p)
 	idx = distances.idxmin()
-	basins.append(idx)
 	basins_raster[int(y), int(x)] = idx
+	i += 1
+	if i > 500:
+		print('500')
+		i = 0
 
 basin_desc = ''
 for b in iho_arctic.iterrows():
@@ -66,7 +71,7 @@ metadata = { 'basins':basin_desc, 'history':history, 'author':author }
 
 ## Save basins raster
 georaster.simple_write_geotiff(
-	'/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/outflow_basins.nc',
+	'/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/outflow_basins.tif',
 	basins_raster, 
 	dist_land.trans,
 	proj4=dist_land.srs.ExportToProj4(),
