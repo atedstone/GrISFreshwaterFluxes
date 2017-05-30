@@ -20,6 +20,11 @@ import statsmodels.api as sm
 from scipy import spatial
 import georaster
 
+from matplotlib import rcParams
+rcParams['font.size'] = 8
+rcParams['font.sans-serif'] = 'Arial'
+rcParams['figure.titlesize'] = 8
+
 pstere = {'init':'epsg:3413'}
 plot_figs = True
 
@@ -160,12 +165,12 @@ if plot_figs:
 	n = 1
 	for nk, ne in zip(king.filter(like='discharge').columns, enderlin_names_for_king):
 		print(nk, ne)	
-		plt.subplot(8, 6, n)
+		plt.subplot(4, 6, n)
 		plt.title(ne)
 		plt.plot(enderlin.index, enderlin[ne], 'r')
 		plt.plot(king_annual_glacier_flux.index, king_annual_glacier_flux[nk], 'b')
 		n += 1
-
+	plt.tight_layout()
 
 # Discharge record from two glaciers does not match - ukassorssuaq and torsukatat
 # Nevertheless, continue for the moment
@@ -279,20 +284,18 @@ basin_q_rignot_sc[basin_q_rignot_sc.isnull()] = basin_q_rignot - basin_scaling.m
 
 ## facet plot of basin-by-basin comparisons
 if plot_figs:
-	plt.figure()
+	plt.figure(figsize=(10,7))
 	n = 1
 	for b in basin_q_rignot.columns:
-		plt.subplot(8, 6, n)
+		plt.subplot(10, 5, n)
 		plt.title(b)
-		try:
+		if b in basin_q_enderlin:
 			plt.plot(basin_q_rignot.index, basin_q_rignot[b], 'blue')
 			plt.plot(basin_q_enderlin.index, basin_q_enderlin[b], 'red')
 			plt.plot(basin_q_rignot_sc.index, basin_q_rignot_sc[b], '--b')
 			plt.xlim('2000-01-01', '2015-12-31')
-		except KeyError:
-			# This logic means we don't see basins that only have Enderlin data
-			pass
-		n += 1
+			n += 1
+	plt.tight_layout()	
 
 
 ## Split Rignot per-basin data out to Enderlin-defined outlets using Enderlin % contributions
@@ -380,18 +383,17 @@ if plot_figs:
 
 ## Correlation with ice-sheet-wide runoff
 
-# Load runoff
-runoff = xr.open_dataset('/scratch/process/project_RACMO/runoff_pstere.nc')
+# Load routed runoff
+runoff = xr.open_dataset('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/FWF17_runoff.nc')
 
 # Load mask (as we're only interested in Greenland for this analysis)
 #masks = xr.open_dataset('/scratch/process/RACMO2.3_GRN11_masks_pstere.nc')
 #GrIS_mask = masks.GrIS_mask
-GrIS_mask = georaster.SingleBandRaster('/scratch/process/project_RACMO/mask_GrIS_mask.tif')
+Gr_land_filled = georaster.SingleBandRaster('/scratch/process/project_RACMO/mask_Gr_land_filled.tif')
 
-# Convert from mm w.e. to km3
-runoff_flux = runoff.runoff * (5*5) / 1.0e6
-annual_runoff = runoff_flux \
-	.where(GrIS_mask.r) \
+# Use routed runoff
+annual_runoff = runoff.runoff_ice \
+	.where(Gr_land_filled.r) \
 	.resample('1AS', dim='TIME', how='sum') \
 	.sum(dim=('X', 'Y')) \
 	.to_pandas()
@@ -407,6 +409,8 @@ runoff_discharge = runoff_discharge.dropna()
 # don't use king values as they don't capture all discharge
 runoff_discharge = runoff_discharge[:'2012']
 
+runoff_discharge.to_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/runoff_discharge_values.csv')
+
 # Define and fit model
 X = runoff_discharge.runoff
 y = runoff_discharge.discharge
@@ -414,6 +418,8 @@ X = sm.add_constant(X)
 model = sm.OLS(y, X)
 results = model.fit()
 print(results.summary())
+with open('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/runoff_discharge_model.txt', 'w') as fh:
+	print(results.summary(), file=fh)
 
 if plot_figs:
 	plt.figure()
@@ -605,12 +611,12 @@ tree = spatial.cKDTree(coast_points)
 sid_grid = np.zeros((len(sid_glaciers_monthly), dist_land.ny, dist_land.nx))
 
 # Use 1dp rounded version of dataset
-sid_glaciers_monthly_round = round(sid_glaciers_monthly)
+sid_glaciers_monthly_round = round(sid_glaciers_monthly, 2)
 
 # Add SID from each location in turn
 for ix, row in complete_outlet_points.iterrows():
 	# First convert to pixel coordinates
-	x_px, y_px = dem.coord_to_px(row['geometry'].x, row['geometry'].y)
+	x_px, y_px = dist_land.coord_to_px(row['geometry'].x, row['geometry'].y)
 	# Now find nearest coastal pixel
 	distance, index = tree.query((y_px, x_px), k=1)
 	cpy, cpx = coast_points[index, :]
@@ -619,8 +625,6 @@ for ix, row in complete_outlet_points.iterrows():
 
 
 ## Convert to netCDF
-# Open runoff to easily get coords info
-runoff = xr.open_dataset('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/FWF17_runoff.nc')
 coords = {'TIME':runoff.TIME, 'Y':runoff.Y, 'X':runoff.X}
 # Convert to DataArray, integer (hence scaling, following on from 1dp rounding above)
 sid = xr.DataArray(sid_grid, coords=coords, dims=['TIME', 'Y', 'X'],
@@ -640,8 +644,8 @@ ds.attrs['institution'] = 'University of Bristol (Andrew Tedstone)'
 ds.attrs['title'] = 'Monthly solid ice discharge from Greenland on a projected grid'
 
 # Additional geo-referencing
-ds.attrs['nx'] = float(dem.nx)
-ds.attrs['ny'] = float(dem.ny)
+ds.attrs['nx'] = float(dist_land.nx)
+ds.attrs['ny'] = float(dist_land.ny)
 ds.attrs['xmin'] = float(np.round(np.min(runoff.X), 0))
 ds.attrs['ymax'] = float(np.round(np.max(runoff.Y), 0))
 ds.attrs['spacing'] = 5000.
