@@ -581,7 +581,7 @@ sid_glaciers_monthly = sid_glaciers_monthly.reindex_axis(sorted(sid_glaciers_mon
 to_export = pd.concat((coords_df, sid_glaciers_monthly), axis=0)
 # Export, to 1dp inline with source datasets
 to_export.to_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/sid_glaciers_monthly_coords.csv',
-	float_format='%.1f', date_format='%Y-%m-%d')
+	float_format='%.3f', date_format='%Y-%m-%d')
 
 
 
@@ -611,7 +611,7 @@ tree = spatial.cKDTree(coast_points)
 sid_grid = np.zeros((len(sid_glaciers_monthly), dist_land.ny, dist_land.nx))
 
 # Use 1dp rounded version of dataset
-sid_glaciers_monthly_round = round(sid_glaciers_monthly, 2)
+sid_glaciers_monthly_round = round(sid_glaciers_monthly, 3)
 
 # Add SID from each location in turn
 for ix, row in complete_outlet_points.iterrows():
@@ -626,9 +626,9 @@ for ix, row in complete_outlet_points.iterrows():
 
 ## Convert to netCDF
 coords = {'TIME':runoff.TIME, 'Y':runoff.Y, 'X':runoff.X}
-# Convert to DataArray, integer (hence scaling, following on from 1dp rounding above)
+# Convert to DataArray, integer
 sid = xr.DataArray(sid_grid, coords=coords, dims=['TIME', 'Y', 'X'],
-	encoding={'dtype':'int16', 'scale_factor':0.1, 'zlib':True})
+	encoding={'dtype':'int16', 'scale_factor':0.001, 'zlib':True})
 sid.name = 'Solid ice discharge'
 sid.attrs['long_name'] = 'Solid ice discharge'
 sid.attrs['units'] = 'km3'
