@@ -58,13 +58,13 @@ project_layer = function(layer, round=FALSE){
 
 
 ### Project the runoff data
-nbands = 696
+nbands = 708
 fname_store = vector('list', nbands)
 for(i in 1:nbands){
 	print(i)
 
 	# Load in runoff for specified month
-	runoff = raster('/scratch/L0data/RACMO/RACMO2.3_GRN11_runoff_monthly_1958-2015.nc', 
+	runoff = raster('/scratch/L0data/RACMO/Nov2017/runoff.1958-2016.BN_RACMO2.3p2_FGRN11_11km.MM.nc', 
 		varname='runoff', band=i)
 
 	r2 = project_layer(runoff, round=FALSE)
@@ -77,7 +77,7 @@ for(i in 1:nbands){
 stacked = stack(fname_store)
 # This doesn't give us a nice Time dimension, just integers...
 # but I don't think it's possible with writeRaster
-writeRaster(stacked, '/scratch/process/project_RACMO/runoff_pstere.nc', overwrite=TRUE, 
+writeRaster(stacked, '/scratch/process/project_RACMO/runoff_pstere_Nov2017.nc', overwrite=TRUE, 
 	format='CDF', varname='runoff', xname='X', yname='Y', zname='TIME', 
 	longname='Runoff mm we')
 
@@ -85,27 +85,27 @@ writeRaster(stacked, '/scratch/process/project_RACMO/runoff_pstere.nc', overwrit
 
 
 ### Masks
-layers = list('LSM_noGrIS', 'icecon', 'icemask_no_GrIS', 'Gr_land', 
- 	'GrIS_mask', 'GrIS_caps_mask', 'topography') 
+# layers = list('LSM_noGrIS', 'icecon', 'icemask_no_GrIS', 'Gr_land', 
+#  	'GrIS_mask', 'GrIS_caps_mask', 'topography') 
 
-store = vector('list', 6)
-fname_store = vector('list', 6)
-for(i in 1:6){
-	print(i)
+# store = vector('list', 6)
+# fname_store = vector('list', 6)
+# for(i in 1:6){
+# 	print(i)
 
-	# Load in runoff for specified month
-	mask = raster('/scratch/L0data/RACMO/RACMO2.3_GRN11_masks.nc', 
-		varname=layers[[i]])
+# 	# Load in runoff for specified month
+# 	mask = raster('/scratch/L0data/RACMO/Nov2017/FGRN11_masks.nc', 
+# 		varname=layers[[i]])
 
-	if(layers[[i]] == 'topography'){
-		m = project_layer(mask, round=FALSE)
-	}
-	else{
-		m = project_layer(mask, round=TRUE)
-	}
-	# turn NAs to zeros
-	m[is.na(m)] = 0
+# 	if(layers[[i]] == 'topography'){
+# 		m = project_layer(mask, round=FALSE)
+# 	}
+# 	else{
+# 		m = project_layer(mask, round=TRUE)
+# 	}
+# 	# turn NAs to zeros
+# 	m[is.na(m)] = 0
 
-	fname = paste('/scratch/process/project_RACMO/mask_', layers[[i]], '.tif', sep='')
-	writeRaster(m, fname, overwrite=TRUE)
-}
+# 	fname = paste('/scratch/process/project_RACMO/mask_', layers[[i]], '.tif', sep='')
+# 	writeRaster(m, fname, overwrite=TRUE)
+# }
