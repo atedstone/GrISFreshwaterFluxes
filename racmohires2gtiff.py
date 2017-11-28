@@ -30,6 +30,7 @@ do_gris = False
 do_ncaa = False
 do_scaa = False
 do_mosaic = True
+do_masks = True
 
 ### Greenland 1 km
 if do_gris:
@@ -153,3 +154,30 @@ if do_mosaic:
 
 
 	# Ideally need a consistency check that correct month of data is being substituted?
+	# Also, are extents lining up precisely? Check for grid shifts.
+
+
+"""
+Masks/DEMs required:
+For routing...
+	DEM of ice surfaces
+	ice mask
+	land mask (can be combined)
+
+For analysis...
+	Need to check with JB
+
+
+
+"""
+if do_masks:
+
+	## DEM
+	# Ergh...
+	
+
+
+	FGRN11_Masks.nc
+	CAA_topo_icemask_lsm_lon_lat_CAA_North_NCAA.nc
+	CAA_topo_icemask_lsm_lon_lat_CAA_South_SCAA.nc
+	Icemask_Topo_Iceclasses_lon_lat_average_1km_GrIS.nc

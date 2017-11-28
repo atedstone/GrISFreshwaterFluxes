@@ -222,27 +222,29 @@ scale_factors = scale_factors.reshape(grid_lon.shape)
 
 ## Step 3: route monthly runoff
 # Open the gridded runoff file          
-runoff = xr.open_dataset(PROCESS_DIR + 'project_RACMO/runoff_pstere.nc',
-	decode_times=False, chunks={'TIME':12})
+#runoff = xr.open_dataset(PROCESS_DIR + 'project_RACMO/runoff_pstere.nc',
+#	decode_times=False, chunks={'TIME':12})
 times = pd.date_range('1958-01-01', '2015-12-31', freq='1MS')
-runoff['TIME'] = times
+#runoff['TIME'] = times
 
 if debug == True:
 	store_ice = np.zeros((12*3, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
 	store_tundra = np.zeros((12*3, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
 	dates = pd.date_range('1958-01-01', '1960-12-01', freq='1MS')
 else:
-	dates = runoff.TIME.to_index()
+	dates = times
 	store_ice = np.zeros((len(dates), ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
 	store_tundra = np.zeros((len(dates), ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
 
-n = 0
+n = 1
 ice_r_pre = []
 ice_r_post = []
 for date in dates:
 	print(date)
 	# Import runoff data grid from netcdf
-	r_month = runoff.runoff.sel(TIME=date).values.squeeze() / scale_factors
+	fname = '/scratch/process/project_RACMO/runoff_b%s.tif' % n
+	r_month = georaster.SingleBandRaster(fname).r / scale_factors
+	#r_month = runoff.runoff.sel(TIME=date).values.squeeze() / scale_factors
 	# Convert mmWE to flux per grid cell
 	r_month = np.where(r_month > 0, r_month * (5*5) / 1.0e6, 0) 
 	# Get ice component of runoff
@@ -403,7 +405,7 @@ ds.Y.attrs['axis'] = 'Y'
 ds.TIME.attrs['standard_name'] = 'time'
 ds.TIME.attrs['axis'] = 'TIME'
 
-ds.to_netcdf('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/FWF17_runoff.nc', format='NetCDF4')
+ds.to_netcdf('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/FWF17_runoff_RACMO2.3p2.nc', format='NetCDF4')
 
 # pre = pd.Series(ice_r_pre, index=dates)
 # pre.to_csv(PROCESS_DIR + 'runoff_monthly_totals_pre_routing.csv')
