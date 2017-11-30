@@ -56,10 +56,10 @@ def pstere_lat2k0(lat):
 # ----------------------------------------------------------------------------
 
 ## Only use topography of ice surfaces - route to ice sheet + cap margins.
-dem_uri = PROCESS_DIR + 'project_RACMO/mask_topography.tif'
-ice_mask_uri = PROCESS_DIR + 'project_RACMO/mask_icecon.tif'
+dem_uri = PROCESS_DIR + 'mask_Geopotential_mosaic.tif'
+ice_mask_uri = PROCESS_DIR + 'mask_icemask_mosaic.tif'
 ice_mask = georaster.SingleBandRaster(ice_mask_uri)
-dem_sm_uri = PROCESS_DIR + 'topography_ice_smoothed.tif'
+dem_sm_uri = PROCESS_DIR + 'topography_ice_mosaic_smoothed.tif'
 ## Set nans to zero - I think this is needed for pit filling?
 dem = georaster.SingleBandRaster(dem_uri)
 dem_ice = georaster.SingleBandRaster.from_array(np.where(ice_mask.r == 1, dem.r, 0), ice_mask.trans,
@@ -112,25 +112,20 @@ georaster.simple_write_geotiff(
 
 
 ## Create distance raster of land mask so we can find coast later.
-lsm = georaster.SingleBandRaster('/scratch/process/project_RACMO/mask_LSM_noGrIS.tif')
-Gr_land = georaster.SingleBandRaster('/scratch/process/project_RACMO/mask_Gr_land.tif')
-landice_mask = georaster.SingleBandRaster.from_array(lsm.r+Gr_land.r, lsm.trans,
-	lsm.proj.srs, gdal.GDT_Byte)
-# landice_mask_uri = PROCESS_DIR + 'project_RACMO/mask_landandice_racmo_EPSG3413_5km.tif'
-# landice_mask = georaster.SingleBandRaster(landice_mask_uri)
-# Grab geo-referencing, for writing out new geoTIFFs
+landice_mask = georaster.SingleBandRaster('mask_LandSeaMask.tif')
 trans = landice_mask.trans
 proj4 = landice_mask.srs.ExportToProj4()
 # Fill holes to make sure we reach the coast
 landice_mask_filled = sc_morph.binary_fill_holes(landice_mask.r)
 landice_mask.r = landice_mask_filled
-landice_mask.save_geotiff('/scratch/process/project_RACMO/mask_landandice_filled.tif',
+landice_mask.save_geotiff('mask_LandSeaMask_filled.tif',
 	dtype=gdal.GDT_Byte)
-# Also output Greenland-only mask (faciliates easy comparison to unrouted data)
+# Also output filled Greenland-only mask (faciliates easy comparison to unrouted data)
+Gr_land = georaster.SingleBandRaster('mask_LSMGr.tif')
 Gr_land_filled_r = sc_morph.binary_fill_holes(Gr_land.r)
 Gr_land_filled = georaster.SingleBandRaster.from_array(Gr_land_filled_r, lsm.trans,
 	lsm.proj.srs, gdal.GDT_Byte)
-Gr_land_filled.save_geotiff('/scratch/process/project_RACMO/mask_Gr_land_filled.tif',
+Gr_land_filled.save_geotiff('mask_LSMGr_filled.tif',
 	dtype=gdal.GDT_Byte)
 # Get distances
 out, distances = morphology.medial_axis(landice_mask_filled, return_distance=True)
@@ -191,9 +186,9 @@ ice_points = np.zeros((len(xp), 2))
 ice_points[:, 0] = yp
 ice_points[:, 1] = xp
 
-## Load land mask to route tundra runoff (euclidean distance)
-land_mask = georaster.SingleBandRaster.from_array((lsm.r+Gr_land.r)-ice_mask.r, lsm.trans,
-	lsm.proj.srs, gdal.GDT_Byte)
+## Load land, no ice mask to route tundra runoff (euclidean distance)
+land_mask = georaster.SingleBandRaster.from_array(landice_mask_filled.r-ice_mask.r, trans,
+	proj4, gdal.GDT_Byte)
 x = np.arange(0, land_mask.nx)
 y = np.arange(0, land_mask.ny)
 xi, yi = np.meshgrid(x, y)
@@ -206,7 +201,7 @@ land_points[:, 1] = xp
 
 ### Calculate scaling factors for polar stereo projection
 # We also use these grids later as nc variables lon and lat
-grid_lon, grid_lat = lsm.coordinates(latlon=True)
+grid_lon, grid_lat = landice_mask.coordinates(latlon=True)
 # Convert to paired columns
 grid_latlon = np.vstack((grid_lat.flatten(), grid_lon.flatten())).T
 # Convert to radians
@@ -221,11 +216,7 @@ scale_factors = scale_factors.reshape(grid_lon.shape)
 
 
 ## Step 3: route monthly runoff
-# Open the gridded runoff file          
-#runoff = xr.open_dataset(PROCESS_DIR + 'project_RACMO/runoff_pstere.nc',
-#	decode_times=False, chunks={'TIME':12})
 times = pd.date_range('1958-01-01', '2015-12-31', freq='1MS')
-#runoff['TIME'] = times
 
 if debug == True:
 	store_ice = np.zeros((12*3, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
@@ -241,8 +232,8 @@ ice_r_pre = []
 ice_r_post = []
 for date in dates:
 	print(date)
-	# Import runoff data grid from netcdf
-	fname = '/scratch/process/project_RACMO/runoff_b%s.tif' % n
+	# Import runoff from reprojected GeoTIFF
+	fname = 'runoff_b%s.tif' % n
 	r_month = georaster.SingleBandRaster(fname).r / scale_factors
 	#r_month = runoff.runoff.sel(TIME=date).values.squeeze() / scale_factors
 	# Convert mmWE to flux per grid cell
