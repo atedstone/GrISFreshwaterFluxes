@@ -23,8 +23,9 @@ import pandas as pd
 import gdal
 import numpy as np
 import subprocess
+import os
 
-PROCESS_DIR = '/scratch/process/project_RACMO/'
+PROCESS_DIR = os.environ['PROCESS_DIR']
 
 do_gris = False
 do_ncaa = False
@@ -130,20 +131,20 @@ if do_mosaic:
 		print(time)
 
 		cmd = 'gdalwarp -r average'
-		into_fn = '/scratch/process/project_RACMO/runoff_b%s.tif' % n
+		into_fn = '%s/runoff_b%s.tif' %(PROCESS_DIR, n)
 
 		# Add GrIS
-		fn = '/scratch/process/project_RACMO/GrIS_1km_runoff_month_%s.tif' % n
+		fn = '%s/GrIS_1km_runoff_month_%s.tif' %(PROCESS_DIR, n)
 		subprocess.call('%s %s %s' %(cmd, fn, into_fn), shell=True)
 
 		if n <= 695:
 			# Add NCAA
 			# Use a cutline because otherwise the NCAA domain overlaps the GrIS domain
-			fn = '/scratch/process/project_RACMO/NCAA_1km_runoff_month_%s.tif' % (n-1)
+			fn = '%s/NCAA_1km_runoff_month_%s.tif' % (PROCESS_DIR, n-1)
 			subprocess.call('%s -cutline /home/at15963/Dropbox/work/papers/bamber_fwf/NCAA_bounds.shp %s %s' %(cmd, fn, into_fn), shell=True)
 
 			# Add SCAA
-			fn = '/scratch/process/project_RACMO/SCAA_1km_runoff_month_%s.tif' % (n-1)
+			fn = '%s/SCAA_1km_runoff_month_%s.tif' % (PROCESS_DIR, n-1)
 			subprocess.call('%s %s %s' %(cmd, fn, into_fn), shell=True)
 
 		n += 1
@@ -172,12 +173,62 @@ For analysis...
 """
 if do_masks:
 
-	## DEM
-	# Ergh...
+	masks_11km = ['mask_icemask', 'mask_Geopotential']
+
+	# Create a copy of each 11km mask to mosaic into later
+	for mask in masks_11km:
+		original_fn = '%s/%s.tif' %(PROCESS_DIR, mask)
+		into_fn = '%s/%s_mosaic.tif' %(PROCESS_DIR, mask)
+		subprocess.call('cp %s %s' %(original_fn, into_fn), shell=True)
+	
+
+	## Specify region masks to mosaic in		
+	# Only Ice and Topo are available - not land masses
+	# Make sure they are listed in same order as destinations in masks_11km
+	region_masks = {
+	'GrIS': {'fn': 'Icemask_Topo_Iceclasses_lon_lat_average_1km_GrIS.nc', 
+			 'layers': ['Promicemask, Topography'] },
+	'NCAA': {'fn': 'CAA_topo_icemask_lsm_lon_lat_CAA_North_NCAA.nc',
+			 'layers': ['Icemask', 'Topography'] },
+	'SCAA': {'fn': 'CAA_topo_icemask_lsm_lon_lat_CAA_South_SCAA.nc',
+			 'layers': ['Icemask', 'Topography'] }
+	}
+
+	proj4 = '+init=epsg:3413'
+
+	# Iterate region-by-region, mosaicing into domain-wide masks
+	for region in region_masks:
+
+		# Open region nc
+		nc = xr.open_dataset('%s/%s' %(PROCESS_DIR, region['fn']))
+		# extent and geotrans have to be calculated as not available in ncdf
+		extent = [nc.x[0], nc.y[-1]-1000, nc.x[-1]-1000, nc.y[0]]
+		geotrans = (nc.x[0],1000,0,nc.y[-1]-1000,0,-1000)
+
+		n = 0 # counter for indexing into masks_11km
+		# Iterate for each layer in region
+		for layer in region['layers']:
+			# Write a geotiff so that GDAL can use it
+			data = np.flipud(nc[layer].values.squeeze())
+			tif_fn = PROCESS_DIR + '/%s_%s.tif' %(region, layer)
+			georaster.simple_write_geotiff(
+				tif_fn,
+				data,
+				geotrans,
+				proj4=proj4,
+				dtype=gdal.GDT_Int
+				)
+
+			# Now use gdalwarp to add to mosaic tif
+			cmd = 'gdalwarp -r average'
+			dest_fn = '%s/%s' %(PROCESS_DIR, masks_11km[n] + '_mosaic.tif')
+			subprocess.call('%s %s %s' %(cmd, tif_fn, dest_fn), shell=True)
+
+			nc = None
+			n += 1
+
 	
 
 
-	FGRN11_Masks.nc
-	CAA_topo_icemask_lsm_lon_lat_CAA_North_NCAA.nc
-	CAA_topo_icemask_lsm_lon_lat_CAA_South_SCAA.nc
-	Icemask_Topo_Iceclasses_lon_lat_average_1km_GrIS.nc
+	
+
