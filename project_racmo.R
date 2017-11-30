@@ -97,8 +97,8 @@ for(i in 1:6){
 	mask = raster('/scratch/L0data/RACMO/Nov2017/FGRN11_Masks.nc', 
 		varname=layers[[i]])
 
-	if(layers[[i]] == 'topography'){
-		m = project_layer(mask, round=FALSE)
+	if(layers[[i]] == 'Geopotential'){
+		m = project_layer(mask / 9.80665, round=FALSE) # apply scaling factor (grav. acceleration)
 	}
 	else{
 		m = project_layer(mask, round=TRUE)
