@@ -56,26 +56,23 @@ def pstere_lat2k0(lat):
 
 # ----------------------------------------------------------------------------
 
-## Only use topography of ice surfaces - route to ice sheet + cap margins.
-dem_uri = PROCESS_DIR + 'mask_Geopotential_mosaic.tif'
+## Sort ice mask
 ice_mask_uri = PROCESS_DIR + 'mask_icemask_mosaic.tif'
 ice_mask = georaster.SingleBandRaster(ice_mask_uri)
 # Convert PROMICE indicators to binary
 ice_mask.r = np.where(ice_mask.r >= 1, 1, 0)
-# Fill the small holes which arise from the downsampling
+# Fill the small holes which arise from the downsampling - used later
 ice_mask_filled = sc_morph.binary_fill_holes(ice_mask.r)
-#filled_areas = filled_mask - ice_mask.r
-#ice_mask.r = filled_mask
-ice_mask.save_geotiff(PROCESS_DIR + 'mask_icemask_mosaic_filled_binary.tif')
+ice_mask.save_geotiff(PROCESS_DIR + 'mask_icemask_mosaic_binary.tif')
+
+## Only use topography of ice surfaces - route to ice sheet + cap margins.
+dem_uri = PROCESS_DIR + 'mask_Geopotential_mosaic.tif'
 dem_sm_uri = PROCESS_DIR + 'topography_ice_mosaic_smoothed.tif'
 ## Set nans to zero - I think this is needed for pit filling?
 dem = georaster.SingleBandRaster(dem_uri)
 dem.r = np.where(dem.r == 9999, 0, dem.r)
-# Add 200 m elevation to areas of ice mask which got filled in
-#dem.r = np.where(filled_areas, dem.r + 200, dem.r)
 dem_ice = georaster.SingleBandRaster.from_array(np.where(ice_mask.r == 1, dem.r, 0), ice_mask.trans,
 	ice_mask.proj.srs, gdal.GDT_Float32)
-#dem.r = np.where(np.isnan(dem.r), 0, dem.r)
 dem_ice.save_geotiff(dem_sm_uri)
 dem = None
 
@@ -83,16 +80,6 @@ dem = None
 ## Step 0: fill pits
 dempits_uri = PROCESS_DIR + 'ROUTING_racmo_EPSG3413_5km_dem_filledpits.tif'
 routing.fill_pits(dem_sm_uri, dempits_uri)
-
-# Generate revised ice mask as pit-filling changes margins
-# dempits = georaster.SingleBandRaster(dempits_uri)
-# ice_mask_pits = georaster.SingleBandRaster.from_array(
-# 	np.where(dempits.r > 0, 1, 0),
-# 	ice_mask.trans, ice_mask.proj.srs, gdal.GDT_Float32
-# 	)
-# # Fill holes again...seems to be necessary to deal with fjord artifacts on east coast
-# ice_mask_pits.r = sc_morph.binary_fill_holes(ice_mask_pits.r)
-# ice_mask_pits.save_geotiff(PROCESS_DIR + 'mask_icemask_mosaic_filled_binary_pits.tif')
 
 
 ## Step 1: flow direction
@@ -132,11 +119,15 @@ georaster.simple_write_geotiff(
 	)
 
 
-## Create distance raster of land mask so we can find coast later.
+## Load land+ice mask
 landice_mask = georaster.SingleBandRaster(PROCESS_DIR + 'mask_LandSeaMask.tif')
 trans = landice_mask.trans
 proj4 = landice_mask.srs.ExportToProj4()
-# Also output filled Greenland-only mask (faciliates easy comparison to unrouted data)
+
+# Create filled Greenland-only mask (faciliates easy comparison to unrouted data)
+# We do this because the Greenland land mass extent is different between 
+# LandSeaMask and LSMGr. In order to be able to isolate Greenland in post-processing
+# we choose to treat LSMGr as 'correct'. Thus, it's merged into LandSeaMask_filled below.
 Gr_land = georaster.SingleBandRaster(PROCESS_DIR + 'mask_LSMGr.tif')
 Gr_land_filled_r = sc_morph.binary_fill_holes(Gr_land.r)
 Gr_land_filled = georaster.SingleBandRaster.from_array(Gr_land_filled_r, trans,
@@ -144,24 +135,19 @@ Gr_land_filled = georaster.SingleBandRaster.from_array(Gr_land_filled_r, trans,
 Gr_land_filled.save_geotiff(PROCESS_DIR + 'mask_LSMGr_filled.tif',
 	dtype=gdal.GDT_Byte)
 
-#landice_mask.r = np.where(((landice_mask.r ==1) | (Gr_land_filled.r == 1)), 1, 0)
 # Fill holes to make sure we reach the coast
 landice_mask_filled = sc_morph.binary_fill_holes(landice_mask.r)
 landice_mask.r = landice_mask_filled
 landice_mask.save_geotiff(PROCESS_DIR + 'mask_LandSeaMask_filled.tif',
 	dtype=gdal.GDT_Byte)
 landice_mask = None
+
 # Merge in the wider extent of Gr_land_filled
 subprocess.call('gdalwarp -cutline /home/at15963/Dropbox/work/papers/bamber_fwf/gris_bounds.shp %s/mask_LSMGr_filled.tif %s/mask_LandSeaMask_filled.tif' %(PROCESS_DIR, PROCESS_DIR), shell=True)
 # Load the filled one properly
 landice_mask_filled = georaster.SingleBandRaster(PROCESS_DIR + 'mask_LandSeaMask_filled.tif')
 
-# landice_mask = None
-# landice_mask_filled = None
-# # LSMGr and LandSeaMask have different Greenland land extents
-# # Overwrite LandSeaMask with LSMGr so that we can isolate GrIS in post-processing
-# subprocess.call('gdalwarp -r max %s/mask_LSMGr_filled.tif %s/mask_LandSeaMask_filled.tif' %(PROCESS_DIR, PROCESS_DIR), shell=True)
-# landice_mask_filled = georaster.SingleBandRaster(PROCESS_DIR + 'mask_LandSeaMask_filled.tif')
+
 # Get distances
 out, distances = morphology.medial_axis(landice_mask_filled.r, return_distance=True)
 georaster.simple_write_geotiff(
@@ -222,19 +208,13 @@ ice_points[:, 0] = yp
 ice_points[:, 1] = xp
 
 ## Load land, no ice mask to route tundra runoff (euclidean distance)
-# land_mask = georaster.SingleBandRaster.from_array(landice_mask_filled.r-ice_mask_filled, trans,
-# 	proj4, gdal.GDT_Byte)
-# land_mask.save_geotiff(PROCESS_DIR + 'ROUTING_land_only_mask.tif')
-#icemask_11km = georaster.SingleBandRaster(PROCESS_DIR + 'mask_icemask.tif')
 landmask_11km = georaster.SingleBandRaster(PROCESS_DIR + 'mask_LandSeaMask.tif')
 # Use the 'detailed' (derived from 1km) ice mask to identify just-land pixels.
 # Note that this isn' the filled version, because the ice FWF routing also isn't over filled areas.
 # However, am using 11 km land mask as nothing better is available from IMAU datasets provided.
 land_only_11km = landmask_11km.r - ice_mask.r
-# x = np.arange(0, land_mask.nx)
-# y = np.arange(0, land_mask.ny)
-x = np.arange(0, icemask_11km.nx)
-y = np.arange(0, icemask_11km.ny)
+x = np.arange(0, landmask_11km.nx)
+y = np.arange(0, landmask_11km.ny)
 xi, yi = np.meshgrid(x, y)
 xp = xi[land_only_11km == 1].flatten()
 yp = yi[land_only_11km == 1].flatten()
@@ -324,7 +304,7 @@ for date in dates:
 
 
 	## Route tundra fluxes too ...
-	## NEED TO OPEN UNMODIFIED 11KM FILES HERE
+	# Tundra only present in 11km base RACMO files, so we need to read those separately here.
 	# Do by euclidean distance
 	r_base11km = georaster.SingleBandRaster(PROCESS_DIR + 'arctic_domain_bckup/' + 'runoff_b%s.tif' %(n+1))
 	r_base11km.r = (r_base11km.r * (5*5) / 1.0e6) / scale_factors 
@@ -341,19 +321,6 @@ for date in dates:
 	n += 1
 
 
-"""
-Masks to include in this product:
-* Greenland              >
-* Canadian High Arctic   > Could produce single combined mask with numbers for each area
-* Svalbard               >
-* Iceland                >
-
-* Ocean basins
-"""
-
-#routed_old = xr.open_dataset('~/Dropbox/RACMO23_routed_1958_2015.nc')
-#store_ice = routed_old.runoff_ice.to_masked_array()
-#store_tundra = routed_old.runoff_tundra.to_masked_array()
 
 grid_x,grid_y = dem_ice.coordinates()
 coords = {'TIME':dates, 'Y':grid_y[:,0], 'X':grid_x[0,:]}
