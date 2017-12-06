@@ -35,3 +35,40 @@ Uses the PyGeoProcessing toolbox. The toolbox only runs under Python 2.7 (at lea
 
 Script: `allocate_coast_to_basin.py`. See script for citation of IHO data source
 
+
+
+## Masks - November/December 2017 update
+
+There are four sources of masks:
+
+RACMO run @ ~11 km point grid resolution
+   - LSMGr
+   - icemask
+   - LandSeaMask
+   - Promicemask
+   - GrIS_caps_mask
+   - Geopotential (topography)
+   - ----> all these wind up as mask_<name>.tif.
+RACMO @ 1km NCAA
+    - Ice mask
+    - topography
+RACMO @ 1 km SCAA
+    - ice mask
+    - topography
+RACMO @ 1 km GRIS
+    - ice mask
+    - topography
+
+After racmohires2gtiff.py is run, another two key masks are generated as geotiffs:
+- mask_Geopotential_mosaic.tif
+- mask_icemask_mosaic.tif
+These contain the higher-res (1km-derived) topo and ice masks respectively.
+
+From this point on it is therefore important not to use 11 km base masks in application to any 1km downsampled areas! (the bounds will be wrong).
+
+The regional masks rema
+
+
+## Main differences in Nov/Dec 2017 update
+
+* Improved the masking used for the tundra, which led to a dramatic reduction (50%) in tundra runoff compared to runoff v1. New values more in line with Bamber 2012 paper, a little lower in fact.
