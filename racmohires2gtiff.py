@@ -8,6 +8,8 @@ HOWEVER there is something weird about the vrt/tif output by gdal_translate, qgi
 
 It isn't picking up the geo-referencing ---- will have to write out new tiffs myself :(
 
+MAKE SURE TO RUN using the conda environment: geospatial, NOT pygeoprocess
+
 ---
 
 Could set the target extent of the vrt manually:
@@ -30,7 +32,7 @@ PROCESS_DIR = os.environ['PROCESS_DIR']
 do_gris = False
 do_ncaa = False
 do_scaa = False
-do_mosaic = True
+do_mosaic = False
 do_masks = True
 
 ### Greenland 1 km
@@ -173,6 +175,8 @@ For analysis...
 """
 if do_masks:
 
+	import collections
+
 	masks_11km = ['mask_icemask', 'mask_Geopotential']
 
 	# Create a copy of each 11km mask to mosaic into later
@@ -185,50 +189,78 @@ if do_masks:
 	## Specify region masks to mosaic in		
 	# Only Ice and Topo are available - not land masses
 	# Make sure they are listed in same order as destinations in masks_11km
-	region_masks = {
-	'GrIS': {'fn': 'Icemask_Topo_Iceclasses_lon_lat_average_1km_GrIS.nc', 
-			 'layers': ['Promicemask, Topography'] },
-	'NCAA': {'fn': 'CAA_topo_icemask_lsm_lon_lat_CAA_North_NCAA.nc',
+	region_masks = collections.OrderedDict( 
+	GrIS= {'fn': 'Icemask_Topo_Iceclasses_lon_lat_average_1km_GrIS.nc', 
+			 'layers': ['Promicemask', 'Topography'] },
+	NCAA= {'fn': 'CAA_topo_icemask_lsm_lon_lat_CAA_North_NCAA.nc',
 			 'layers': ['Icemask', 'Topography'] },
-	'SCAA': {'fn': 'CAA_topo_icemask_lsm_lon_lat_CAA_South_SCAA.nc',
+	SCAA= {'fn': 'CAA_topo_icemask_lsm_lon_lat_CAA_South_SCAA.nc',
 			 'layers': ['Icemask', 'Topography'] }
-	}
+	)
 
 	proj4 = '+init=epsg:3413'
 
 	# Iterate region-by-region, mosaicing into domain-wide masks
-	for region in region_masks:
+	for key,vals in reversed(region_masks.items()):
 
-		# Open region nc
-		nc = xr.open_dataset('%s/%s' %(PROCESS_DIR, region['fn']))
-		# extent and geotrans have to be calculated as not available in ncdf
-		extent = [nc.x[0], nc.y[-1]-1000, nc.x[-1]-1000, nc.y[0]]
-		geotrans = (nc.x[0],1000,0,nc.y[-1]-1000,0,-1000)
+		if key == 'GrIS':
+			# The X and Y fields in the masks nc are broken, use runoff nc file instead
+			nc = xr.open_dataset('%s/%s' %('/scratch/L0data/RACMO/Nov2017', 'runoff.1958-2016.BN_RACMO2.4_FGRN11_GrIS.MM.nc'), decode_times=False)
+			extent = [float(nc.lon[0]), float(nc.lat[-1]-1000), float(nc.lon[-1]-1000), float(nc.lat[0])]
+			geotrans = (float(nc.lon[0]),1000,0,float(nc.lat[-1]-1000),0,-1000)
+			nc = None
+			nc = xr.open_dataset('%s/%s' %('/scratch/L0data/RACMO/Nov2017', vals['fn']))
+		else:
+			# Open region nc
+			nc = xr.open_dataset('%s/%s' %('/scratch/L0data/RACMO/Nov2017', vals['fn']))
+			# extent and geotrans have to be calculated as not available in ncdf
+			extent = [float(nc.x[0]), float(nc.y[-1]-1000), float(nc.x[-1]-1000), float(nc.y[0])]
+			geotrans = (float(nc.x[0]),1000,0,float(nc.y[-1]-1000),0,-1000)
+
+		print(key)
+		print(extent)
+		print(geotrans)
 
 		n = 0 # counter for indexing into masks_11km
 		# Iterate for each layer in region
-		for layer in region['layers']:
+		for layer in vals['layers']:
 			# Write a geotiff so that GDAL can use it
 			data = np.flipud(nc[layer].values.squeeze())
-			tif_fn = PROCESS_DIR + '/%s_%s.tif' %(region, layer)
+			tif_fn = PROCESS_DIR + '/mask_%s_%s.tif' %(key, layer)
 			georaster.simple_write_geotiff(
 				tif_fn,
 				data,
 				geotrans,
 				proj4=proj4,
-				dtype=gdal.GDT_Int
+				dtype=gdal.GDT_Int16
 				)
 
 			# Now use gdalwarp to add to mosaic tif
-			cmd = 'gdalwarp -r average'
+			if layer == 'Topography':
+				cmd = 'gdalwarp -r average'
+			else:
+				cmd = 'gdalwarp -r max'
+			if key == 'NCAA':
+				cmd += ' -cutline /home/at15963/Dropbox/work/papers/bamber_fwf/NCAA_bounds.shp '
 			dest_fn = '%s/%s' %(PROCESS_DIR, masks_11km[n] + '_mosaic.tif')
-			subprocess.call('%s %s %s' %(cmd, tif_fn, dest_fn), shell=True)
+			full_cmd = '%s %s %s' %(cmd, tif_fn, dest_fn)
+			print('**CMD: ' + full_cmd)
+			subprocess.call(full_cmd, shell=True)
 
-			nc = None
+			# Also generate stand-alone versions with full arctic extent (helps with isolating GrIS etc)
+			cmd = 'gdalwarp -overwrite -te -1780479.825 -3989808.111 1979520.175 -64808.111 -tr 5000 5000 '
+			gen_fn = PROCESS_DIR + '/mask_%s_%s' %(key, layer)
+			full_cmd = '%s %s.tif %s_arctic.tif' %(cmd, gen_fn, gen_fn)
+			print('**CMD: ' + full_cmd)
+			subprocess.call(full_cmd, shell=True)
+
 			n += 1
+		nc = None
+
+
 
 	
 
 
-	
+
 
