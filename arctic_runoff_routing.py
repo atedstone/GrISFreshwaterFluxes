@@ -29,7 +29,7 @@ import subprocess
 import georaster
 
 # If true, only process 1958
-debug = True
+debug = False
 
 PROCESS_DIR = os.environ['PROCESS_DIR']
 
@@ -240,7 +240,7 @@ scale_factors = scale_factors.reshape(grid_lon.shape)
 
 
 ## Step 3: route monthly runoff
-times = pd.date_range('1958-01-01', '2015-12-31', freq='1MS')
+times = pd.date_range('1958-01-01', '2016-12-31', freq='1MS')
 
 if debug == True:
 	store_ice = np.zeros((12*1, ice_mask.ds.RasterYSize, ice_mask.ds.RasterXSize))
