@@ -72,3 +72,9 @@ The regional masks rema
 ## Main differences in Nov/Dec 2017 update
 
 * Improved the masking used for the tundra, which led to a dramatic reduction (50%) in tundra runoff compared to runoff v1. New values more in line with Bamber 2012 paper, a little lower in fact.
+    - Tundra runoff data are still from the base 11km product resampled to 5km.
+    - Using the 11km land mask as that is the only one available from IMAU, but then removing ice from the mask using the PROMICE 1km mask resampled to 5 km resolution. Visual inspection in QGIS of these masks and a couple of 11km-->5km runoff tiles shows that this is a much more accurate approach than using the 11km-->5km ice mask, which when subtracted from land mask still leaves considerable ice margin areas in the land mask, which then get summed erroneously as ice runoff.
+* Care in defining ice area is required. Previously, I was using image morphology tools to fill 'holes' in the resampled ice masks. However, this is a dangerous approach because often the holes are caused by fjords which were open to the ocean in the 1 km PROMICE mask but which become occluded upon resampling to 5 km resolution.
+    - The solution is not to fill these holes at all. Instead, leave them in place and then just route the water that drains into them via the usual euclidean distance method to the coast. This conserves mass nearly precisely in the few tests I did (+/- a couple of km3 or so).
+
+* The 1km Greenland runoff data show substantially more runoff, especially in 2012. The increases are already present in Brice's 1km data, i.e. the increases compared to FWFv1 are not due to problems with my routing routines.
