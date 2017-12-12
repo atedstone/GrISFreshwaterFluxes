@@ -1,13 +1,12 @@
 """
 Generates a monthly solid ice discharge time series for the Greenland Ice 
-Sheet, 1958 to 2015.
+Sheet, 1958 to 2016.
 
-Uses three datasets: Rignot, Enderlin, King. 
-- Rignot basins are scaled by Enderlin fluxes and used to provide data for 1958, 1964, 1992-1999 period.
-- Enderlin is 2000-2012 'gold standard' dataset by-glacier, annual
-- King is used to provide real monthly values where available, and otherwise to split annual fluxes into monthly by % distribution.
+Uses two datasets: Rignot, King. 
+- Rignot basins are scaled by King fluxes and used to provide data for 1958, 1964, 1992-1999 period.
+- King is 2000-2016 'gold standard' dataset by-glacier, monthly
 
-Andrew Tedstone, May 2017.
+Andrew Tedstone (a.j.tedstone@bristol.ac.uk), May 2017 (version 1) then December 2017 (revised)
 """
 
 import pandas as pd
@@ -28,11 +27,16 @@ rcParams['figure.titlesize'] = 8
 pstere = {'init':'epsg:3413'}
 plot_figs = True
 
+## Processing path
+# Laptop Ubuntu VM
+folder_path = '/media/sf_C_DRIVE/Users/at15963/Dropbox/work/papers/bamber_fwf/'
+# Desktop
+# folder_path = '~/Dropbox/work/papers/bamber_fwf/'
 ### Load ice discharge datasets
 
 ## King/Howat/OSU monthly dataset
 # First create/tidy up the column headings
-king_cols = pd.read_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/monthly_discharge.csv',
+king_cols = pd.read_csv(folder_path + 'monthlyGrISdischarge.csv',
 	skiprows=[1, 3], nrows=2)
 
 kcols = ['Year', 'Month']
@@ -42,8 +46,8 @@ for k, i in king_cols.iteritems():
 		skip += 1
 		continue
 
-	if k.find('Unnamed') == -1:
-		name = k.replace(' ', '').lower().strip()
+	if k.find('[]') == -1:
+		name = k.replace(' ', '').lower().strip().strip("'")
 		name_col = name + '_discharge'
 	else:
 		name_col = name + '_std'
@@ -51,14 +55,14 @@ for k, i in king_cols.iteritems():
 	kcols.append(name_col)
 
 # Now use columns to load dataset
-king = pd.read_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/monthly_discharge.csv',
+king = pd.read_csv(folder_path + 'monthlyGrISdischarge.csv',
 	skiprows=4, names=kcols, parse_dates={'date':['Year', 'Month']}, index_col='date')
 
 
 # King glaciers locations
-king_locs = pd.read_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/monthly_discharge.csv',
-	skiprows=0, nrows=1)
-king_locs.columns = kcols
+king_locs = pd.read_csv(folder_path + 'monthlyGrISdischarge.csv',
+	skiprows=2, nrows=1, names=kcols)
+#king_locs.columns = kcols
 lats = king_locs.filter(like='discharge')
 lons = king_locs.filter(like='std')
 lons.columns = lats.columns
@@ -66,87 +70,15 @@ king_locs = pd.concat([lats.T, lons.T], axis=1)
 king_locs.columns = ['latitude', 'longitude']
 geometry = [Point(xy) for xy in zip(king_locs.longitude, king_locs.latitude)]
 king_geo = gpd.GeoDataFrame({'king_name':king_locs.index}, crs={'init':'epsg:4326'}, geometry=geometry)
-king_geo.to_file('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/king_locs.shp')
+king_geo.to_file(folder_path + 'outputs_Nov2017/king_locs.shp')
 king_pstere = king_geo.to_crs(pstere)
 
 
-## Enderlin annual dataset
-# Specifying nrows cuts the various average rows off the bottom of the dataset 
-enderlin_raw = pd.read_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/GrIS_D-timeseries.txt', encoding='mac_roman', 
-	delim_whitespace=True, index_col='Glacier_Name', nrows=178)
-
-enderlin = enderlin_raw.drop(enderlin_raw.columns[0], axis=1)
-enderlin = enderlin.drop(enderlin_raw.columns[1], axis=1)
-enderlin = enderlin.T
-enderlin.index = pd.date_range('2000-01-01', '2012-01-01', freq='1AS')
-enderlin_cols = [c + '_discharge' for c in enderlin.columns]
-enderlin.columns = enderlin_cols
-
-# Enderlin glacier locations
-enderlin_locs = pd.concat([enderlin_raw[enderlin_raw.columns[0]], enderlin_raw[enderlin_raw.columns[1]]], axis=1)
-enderlin_locs = enderlin_locs.apply(pd.to_numeric, errors='ignore')
-enderlin_locs.columns = ['longitude', 'latitude']
-enderlin_locs.index = enderlin_cols
-geometry = [Point(xy) for xy in zip(enderlin_locs.longitude, enderlin_locs.latitude)]
-enderlin_geo = gpd.GeoDataFrame({'enderlin_name':enderlin_locs.index}, crs={'init':'epsg:4326'}, geometry=geometry)
-enderlin_geo.to_file('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/enderlin_locs.shp')
-enderlin_pstere = enderlin_geo.to_crs(pstere)
 
 
-## Find equivalent labels between Enderlin and King datasets (metres - using pstere coords)
-king_equiv = []
-king_equiv_ix = []
-for ix, row in king_pstere.iterrows():
-	dists = enderlin_pstere.distance(row.geometry)
-	if dists.min() < 15000:
-		ix_min = dists.argmin()
-		equiv_label = enderlin_pstere.loc[ix_min].enderlin_name
-		print('King: %s, Enderlin: %s' % (row.king_name, equiv_label))
-		king_equiv.append(row.king_name)
-		king_equiv_ix.append(equiv_label)
-	else:
-		king_equiv.append(np.nan)
-		king_equiv_ix.append(np.nan)
-
-"""
- At this point I exported the king_equiv values above and then did some further
- manual re-mapping of a few labels.
- ...hence the manually-specified list of names below.
-"""
-
- # List is same length as King dataset.
-enderlin_names_for_king = ['79fjorden_discharge',
-	'hayes_discharge',
-	'zachariaeisstrom_discharge',
-	'alison_discharge',
-	'daugaard_jensen_discharge',
-	'helheim_discharge',
-	'humboldt_discharge',
-	'ikertivaq_south_discharge',
-	'jakobshavn_discharge',
-	'kangerdlugssuaq_discharge',
-	'kangerdlugssup_discharge',
-	'kangilerngata_discharge',
-	'koge_bugt_discharge',
-	'kongoscar_discharge',
-	'petermann_discharge',
-	'rink_discharge',
-	'store_discharge',
-	'tingmjarmiut_discharge',
-	'torsukatat_discharge',
-	'ukassorssuaq_discharge',
-	'upernavik_central_discharge',
-	'upernavik_north_discharge',
-	'upernavik_northwest_discharge',
-	'upernavik_south_discharge'
-	]
-# It seems impossible to match nordre* glaciers, so drop them here (and dropped in list above already)
-king = king.drop('nordrenorth_discharge', axis=1)
-king = king.drop('nordresouth_discharge', axis=1)
 # Retain only discharge, get rid of std
 king = king.filter(like='_discharge')
-# Now remap King columns to Enderlin names
-king.columns = enderlin_names_for_king
+
 
 ## Convert King's monthly rate to monthly flux then calculate total ice-sheet-wide annual flux
 king = king.assign(year_length=np.where(king.index.is_leap_year, 366, 365))
@@ -158,25 +90,7 @@ king_annual_total_flux = monthly_flux.resample('1AS').sum().T.sum()
 # Annual flux per flacier
 king_annual_glacier_flux = monthly_flux.resample('1AS').sum()
 
-# Compare Enderlin and King
-# This doesn't necessarily work currently
-if plot_figs:
-	plt.figure()
-	n = 1
-	for nk, ne in zip(king.filter(like='discharge').columns, enderlin_names_for_king):
-		print(nk, ne)	
-		plt.subplot(4, 6, n)
-		plt.title(ne)
-		plt.plot(enderlin.index, enderlin[ne], 'r')
-		plt.plot(king_annual_glacier_flux.index, king_annual_glacier_flux[nk], 'b')
-		n += 1
-	plt.tight_layout()
 
-# Discharge record from two glaciers does not match - ukassorssuaq and torsukatat
-# Nevertheless, continue for the moment
-# Enderlin total for King glaciers:
-enderlin_annual_subset = enderlin.filter(items=king.columns).T.sum()
-print(enderlin_annual_subset)
 print(king_annual_total_flux)
 
 
@@ -190,49 +104,50 @@ monthly_perc = monthly_flux.groupby(monthly_flux.index.year).apply(lambda x: (10
 
 
 ## Load Rignot's drainage basins
-rignot_basins = gpd.read_file('/home/at15963/Dropbox/work/papers/bamber_fwf/JLB_Analysis_2015/combined.shp')
+rignot_basins = gpd.read_file(folder_path + 'JLB_Analysis_2015/combined.shp')
 # remove the 'basin' prefix
 basins_pstere = rignot_basins.to_crs(pstere)
 basins_pstere.columns = ['GRIDCODE', 'area', 'geometry', 'basin']
 
 
-## Resolve Enderlin individual outlet glaciers into their Rignot basins
+## Resolve King individual outlet glaciers into their Rignot basins
 # First do a spatial join, based on glacier point *within* basin poly
-enderlin_names_basins = gpd.sjoin(enderlin_pstere, basins_pstere, how='left', op='within')
+king_names_basins = gpd.sjoin(king_pstere, basins_pstere, how='left', op='within')
 
-# Next, for the outlets that are not within a basin, resolve them to the nearest one
-enderlin_names_basins = enderlin_names_basins.assign(dist=0)
-unalloc = enderlin_names_basins[enderlin_names_basins.basin.isnull()]
+## Next, for the outlets that are not within a basin, resolve them to the nearest one
+# Add a distance attribute
+king_names_basins = king_names_basins.assign(dist=0)
+unalloc = king_names_basins[king_names_basins.basin.isnull()]
 for ix, row in unalloc.iterrows():
 	dists = basins_pstere.distance(row.geometry)
 	ix_min = dists.argmin()
 	nearest_basin = basins_pstere.loc[ix_min, 'basin']
-	enderlin_names_basins.loc[ix, 'basin'] = nearest_basin	
-	enderlin_names_basins.loc[ix, 'dist'] = dists.min()
+	king_names_basins.loc[ix, 'basin'] = nearest_basin	
+	king_names_basins.loc[ix, 'dist'] = dists.min()
 
 
 ## For mass continuity with Rignot, move some sub-basins into bigger basins...
 # allocate basins below Helheim into Helheim basin
-enderlin_names_basins.loc[enderlin_names_basins.basin.str.contains('basin46'), 'basin'] = 'basin11'
-enderlin_names_basins.loc[enderlin_names_basins.basin.str.contains('basin47'), 'basin'] = 'basin11'
+king_names_basins.loc[king_names_basins.basin.str.contains('basin46'), 'basin'] = 'basin11'
+king_names_basins.loc[king_names_basins.basin.str.contains('basin47'), 'basin'] = 'basin11'
 # ikertivaq north, pamiataq, unnamed into ikertivaq (as sub-basin is on flow divide)
-enderlin_names_basins.loc[enderlin_names_basins.basin.str.contains('basin48'), 'basin'] = 'basin12'
-enderlin_names_basins.loc[enderlin_names_basins.basin.str.contains('basin49'), 'basin'] = 'basin12'
+king_names_basins.loc[king_names_basins.basin.str.contains('basin48'), 'basin'] = 'basin12'
+king_names_basins.loc[king_names_basins.basin.str.contains('basin49'), 'basin'] = 'basin12'
 # Allocate all glaciers in basin38_* basins to basin38
-enderlin_names_basins.loc[enderlin_names_basins.basin.str.contains('basin38_'), 'basin'] = 'basin38'
+king_names_basins.loc[king_names_basins.basin.str.contains('basin38_'), 'basin'] = 'basin38'
 
 
-## Aggregate Ellyn's measurements to basin outputs
-grouped = enderlin_names_basins.groupby('basin')
+## Aggregate King measurements to basin outputs
+grouped = king_names_basins.groupby('basin')
 store = {}
 for basin, glaciers in grouped:
-	q = enderlin.filter(items=glaciers.enderlin_name).sum(axis=1)
+	q = king_annual_glacier_flux.filter(items=glaciers.king_name).sum(axis=1)
 	store[basin] = q
-basin_q_enderlin = pd.DataFrame(store)
+basin_q_king = pd.DataFrame(store)
 
 
 ## Import Rignot's by-basin measurements 
-rignot_raw = pd.read_excel('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/Bamber+co-ords_updatedbasins.xlsx', 
+rignot_raw = pd.read_csv(folder_path + 'ice_discharge/Bamber+co-ords_updatedbasins.csv', 
 	index_col='rignot_name')
 rignot = rignot_raw.drop(labels=['x', 'y', 'area', 'F2000', 'F1996'], axis=1)
 # Drop any entries without a basin
@@ -242,39 +157,39 @@ rignot.basin = ['basin{:.0f}'.format(n) for n in rignot.basin]
 rignot = rignot.groupby(rignot.basin).sum()
 # Basins now unique and provide the row index
 # Create a date index
-date_ix = [pd.datetime(y, 1, 1) for y in rignot.columns]
+date_ix = [pd.datetime(int(y), 1, 1) for y in rignot.columns]
 # Transpose rows<-->columns
 basin_q_rignot = rignot.T
 # Rows are now dates, columns are basins
 basin_q_rignot.index = date_ix
 
 
-## Use Enderlin data to work out % contribution of each glacier to basin's outflow
-grouped = enderlin_names_basins.groupby('basin')
+## Use King data to work out average % contribution of each glacier to basin's 
+## outflow for pre-2000 segmentation
+grouped = king_names_basins.groupby('basin')
 store = {}
-for basin, glaciers in grouped:
+for basin, glaciers in grouped:	
 	# Calculate mean annual basin-wide Q
-	q_basin = enderlin.filter(items=glaciers.enderlin_name).sum(axis=1).mean()
+	#  !! This is a duplicate of some code above
+	q_basin = king_annual_glacier_flux.filter(items=glaciers.king_name).sum(axis=1).mean()
 	# Calculate mean annual Q per glacier
-	q_glaciers = enderlin.filter(items=glaciers.enderlin_name).mean(axis=0)
+	q_glaciers = king_annual_glacier_flux.filter(items=glaciers.king_name).mean(axis=0)
 	# Calculate %contribution of each glacier to basin Q
 	qp = (100 / q_basin) * q_glaciers
 	# Store it
 	store[basin] = qp
 glacier_basin_contrib = pd.DataFrame(store)
 # Collapse to glacier-basinid-contribution.
-#basin_ids = glacier_basin_contrib.apply(lambda row: row.first_valid_index(), axis=1)
-#basin_contrib = glacier_basin_contrib.apply(lambda row: row.dropna().iloc[0], axis=1)
 glacier_basin_contrib = pd.concat({
 	'basin': glacier_basin_contrib.apply(lambda row: row.first_valid_index(), axis=1), 
 	'contrib': glacier_basin_contrib.apply(lambda row: row.dropna().iloc[0], axis=1)
 	}, axis=1)
 
 
-## Scale Rignot basin data to remove offset relative to Enderlin
+## Scale Rignot basin data to remove offset relative to King
 # Use only the common temporal period
-# Basins without Enderlin data get set to NaN...
-basin_scaling = basin_q_rignot['2000':'2009'].mean() - basin_q_enderlin['2000':'2009'].mean()
+# Basins without King data get set to NaN...
+basin_scaling = basin_q_rignot['2000':'2009'].mean() - basin_q_king['2000':'2009'].mean()
 basin_q_rignot_sc = basin_q_rignot - basin_scaling
 # ...so substitute these back in using mean basin scaling
 # n.b. some null columns remain because Rignot dataset does not
@@ -287,19 +202,20 @@ if plot_figs:
 	plt.figure(figsize=(10,7))
 	n = 1
 	for b in basin_q_rignot.columns:
-		plt.subplot(10, 5, n)
+		plt.subplot(5, 7, n)
 		plt.title(b)
-		if b in basin_q_enderlin:
+		if b in basin_q_king:
 			plt.plot(basin_q_rignot.index, basin_q_rignot[b], 'blue')
-			plt.plot(basin_q_enderlin.index, basin_q_enderlin[b], 'red')
+			plt.plot(basin_q_king.index, basin_q_king[b], 'red')
 			plt.plot(basin_q_rignot_sc.index, basin_q_rignot_sc[b], '--b')
 			plt.xlim('2000-01-01', '2015-12-31')
 			n += 1
-	plt.tight_layout()	
+	plt.tight_layout()
+	plt.savefig(folder_path + 'outputs_Nov2017/figures/basins_comparison.pdf')	
 
 
-## Split Rignot per-basin data out to Enderlin-defined outlets using Enderlin % contributions
-# Produces a 'per-glacier' time series like Enderlin's
+## Split Rignot per-basin data out to King-defined outlets using King % contributions
+# Produces a 'per-glacier' time series like King's
 # We are trying to get a dataframe with glaciers=columns, years=rows
 store = []
 for basin in basin_q_rignot_sc.columns:
@@ -307,7 +223,7 @@ for basin in basin_q_rignot_sc.columns:
 	# Time series of basin discharge
 	basin_q = basin_q_rignot_sc.loc[:, basin]
 
-	# Check to see if Enderlin has measurement in this basin
+	# Check to see if King has measurement in this basin
 	#if basin in glacier_basin_contrib.columns:
 	if basin in glacier_basin_contrib.basin.tolist():
 		# Extract % contributions
@@ -338,58 +254,56 @@ glaciers_rignot_sc = glaciers_rignot_sc.dropna(axis=1, how='all')
 ## Replace Rignot values with King or Enderlin from 2000 onward.
 from copy import deepcopy
 glaciers_combined = deepcopy(glaciers_rignot_sc)
-glaciers_combined = glaciers_combined.reindex(pd.date_range('1958-01-01', '2015-01-01', freq='AS'))
+glaciers_combined = glaciers_combined.reindex(pd.date_range('1958-01-01', '2016-01-01', freq='AS'))
 for glacier in glaciers_rignot_sc.columns:
 	# Insert King data where possible, 2000:2015
-	if glacier in king.columns: ## Not using the correct names at the moment!
-		glaciers_combined.loc['2000':'2015', glacier] = king_annual_glacier_flux[glacier]
-		pass
-	# Otherwise insert Enderlin data where it exists
-	elif glacier in enderlin.columns:
-		glaciers_combined.loc['2000':'2012', glacier] = enderlin[glacier]
+	if glacier in king.columns: 
+		glaciers_combined.loc['2000':'2016', glacier] = king_annual_glacier_flux[glacier]
+	else:
+		print('NOTADDED: ' + glacier)
 
 
 ## Enderlin measured a few extra glaciers (basins) not in Rignot - add them in
 # E.g. 'basin51' near Thule is identified in Rignot shapefile, but Rignot does
 # not provide any discharge estimates for the basin.
 # At time of this comment, all these only_enderlin glaciers are in basins 51, 52.
-only_enderlin = []
-for glacier in enderlin.columns:
+only_king = []
+for glacier in king_annual_glacier_flux.columns:
 	if glacier not in glaciers_combined.columns:
-		glaciers_combined = pd.concat((glaciers_combined, enderlin[glacier]), axis=1)
-		only_enderlin.append(enderlin[glacier])
+		glaciers_combined = pd.concat((glaciers_combined, king_annual_glacier_flux[glacier]), axis=1)
+		only_king.append(king_annual_glacier_flux[glacier])
 # Need to double-check for accidental duplicates		
 
 
 ## Optional visualisation of results so far...
 # Load Jonathan's 2012 paper values for comparison
-vals2012 = pd.read_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/Annual_fluxes_2012paper.txt',
+vals2012 = pd.read_csv(folder_path + 'Annual_fluxes_2012paper.txt',
 	names=['Runoff', 'Tundra', 'Discharge', 'Total'], delim_whitespace=True)
 vals2012.index = pd.date_range('1958-01-01', '2010-01-01', freq='1AS')
 
-# Get only the rignot 'glaciers' which Enderlin has data for
-rignot_only_enderlin = glaciers_rignot_sc.filter(items=enderlin.columns)
+# Get only the rignot 'glaciers' which King has data for
+rignot_only_king = glaciers_rignot_sc.filter(items=king.columns)
 
 if plot_figs:
-	plt.figure()
+	plt.figure(figsize=(8,6))
 	plt.plot(glaciers_combined.index, glaciers_combined.sum(axis=1), linewidth=4, marker='s', label='Combined (Rignot.Sc, Enderlin, King)', alpha=0.6)
 	plt.plot(basin_q_rignot.index, basin_q_rignot.sum(axis=1), marker='x', label='Rignot', alpha=0.6)
 	plt.plot(glaciers_rignot_sc.index, glaciers_rignot_sc.sum(axis=1), marker='+', label='Rignot scaled (all glaciers)', alpha=0.6)
-	plt.plot(enderlin.index, enderlin.sum(axis=1), marker='^', label='Enderlin', alpha=0.6)
-	plt.plot(rignot_only_enderlin.index, rignot_only_enderlin.sum(axis=1), marker='x', label='Rignot scaled (only for Enderlin glaciers)', alpha=0.6)
+	plt.plot(king_annual_glacier_flux.index, king_annual_glacier_flux.sum(axis=1), marker='^', label='king', alpha=0.6)
+	plt.plot(rignot_only_king.index, rignot_only_king.sum(axis=1), marker='x', label='Rignot scaled (only for king glaciers)', alpha=0.6)
 	plt.plot(vals2012.index, vals2012.Discharge, marker='*', label='Bamber2012', alpha=0.6)
 	plt.legend()
+	plt.savefig(folder_path + 'outputs_Nov2017/figures/discharge_ds_comparison.pdf')
 
 
 ## Correlation with ice-sheet-wide runoff
 
 # Load routed runoff
-runoff = xr.open_dataset('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/FWF17_runoff.nc')
+runoff = xr.open_dataset(folder_path + 'outputs_Nov2017/FWF17_runoff_RACMO2.3p2.nc',
+	chunks={'TIME':6})
 
 # Load mask (as we're only interested in Greenland for this analysis)
-#masks = xr.open_dataset('/scratch/process/RACMO2.3_GRN11_masks_pstere.nc')
-#GrIS_mask = masks.GrIS_mask
-Gr_land_filled = georaster.SingleBandRaster('/scratch/process/project_RACMO/mask_Gr_land_filled.tif')
+Gr_land_filled = georaster.SingleBandRaster(folder_path + 'outputs_Nov2017/mask_LSMGr_filled.tif')
 
 # Use routed runoff
 annual_runoff = runoff.runoff_ice \
@@ -409,7 +323,7 @@ runoff_discharge = runoff_discharge.dropna()
 # don't use king values as they don't capture all discharge
 runoff_discharge = runoff_discharge[:'2012']
 
-runoff_discharge.to_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/runoff_discharge_values.csv')
+runoff_discharge.to_csv(folder_path + 'outputs_Nov2017/runoff_discharge_values.csv')
 
 # Define and fit model
 X = runoff_discharge.runoff
@@ -418,35 +332,14 @@ X = sm.add_constant(X)
 model = sm.OLS(y, X)
 results = model.fit()
 print(results.summary())
-with open('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/runoff_discharge_model.txt', 'w') as fh:
+with open(folder_path + 'outputs_Nov2017/runoff_discharge_model.txt', 'w') as fh:
 	print(results.summary(), file=fh)
 
 if plot_figs:
-	plt.figure()
+	plt.figure(figsize=(6,4))
 	runoff_discharge.plot(kind='scatter', x='runoff', y='discharge', marker='x', color='k')
 	plt.plot(runoff_discharge.runoff, results.fittedvalues, '-b')
-
-
-# # try a rignot-only, a la Bamber 2012:
-# # we wouldn't expect precise match as Rignot values have been scaled by Enderlin's...
-# runoff_discharge_r = pd.DataFrame({'runoff':runoff_5y, 'discharge':basin_q_rignot.sum(axis=1)})
-# runoff_discharge_r[runoff_discharge_r.discharge == 0] = np.nan
-# runoff_discharge_r = runoff_discharge_r.dropna()
-# X = runoff_discharge_r.runoff
-# y = runoff_discharge_r.discharge
-# X = sm.add_constant(X)
-# model = sm.OLS(y, X)
-# results = model.fit()
-# print(results.summary())
-
-# # check correlation of bamber d/s
-# X = vals2012.Runoff.rolling(5, min_periods=1).mean()
-# y = vals2012.Discharge
-# X = sm.add_constant(X)
-# model = sm.OLS(y, X)
-# results = model.fit()
-# print(results.summary())
-
+	plt.savefig(folder_path + 'outputs_Nov2017/figures/runoff_v_discharge.pdf')
 
 
 
@@ -458,13 +351,14 @@ sid = deepcopy(sid_est)
 sid[runoff_discharge.index] = runoff_discharge.discharge
 
 if plot_figs:
-	plt.figure()
+	plt.figure(figsize=(5,5))
 	sid_est.plot(label='estimated')
 	sid.plot(label='estimated+observed')
 	sid.rolling(5, min_periods=1).mean().plot(label='e+o 5y')
 	vals2012.Discharge.rolling(5, min_periods=1).mean().plot(label='Bamber2012')
 	plt.legend()
 	plt.ylim(160, 1250)
+	plt.savefig(folder_path + 'outputs_Nov2017/figures/discharge_observed_v_estimated.pdf')
 
 
 ## Attribute ice-sheet-wide solid ice discharge to specific glaciers, using monthly contrib
@@ -478,38 +372,17 @@ sid_glaciers = sid.apply(lambda row: row * perc_q)
 sid_glaciers[glaciers_combined.notnull()] = glaciers_combined
 
 # We now have an annual-resolution time series for individual glaciers 1958-2012
-# Values for 2013-2015 are not yet correct.
-
-## Estimate solid ice discharge forward in time (up to 2015)
-"""
-First deal with non-King outlets. Drop them from percentage contribs look up
-and then use remaining glaciers to allocate flux.
-Then essentially allocate the rest of the flux by adding King outlets back on.
-
-The underlying rationale here is that we know the %contrib which each King 
-outlet makes based on our analysis above. This approach doesn't preserve the 
-mass of the modelled ice-sheet-wide SID for 2013 to 2015 but DOES preserve the
-mass output by the King outlets.
-"""
-perc_q_remaining = perc_q.drop(labels=king_annual_glacier_flux.columns)
-sid_1315 = sid['2013':'2015'].apply(lambda row: row * perc_q_remaining)
-# Here we bash the King estimates on...not strictly needed as we fill these data in below, monthly.
-sid_1315 = pd.concat((sid_1315, king_annual_glacier_flux['2013':'2015']), axis='columns')
-
-sid_glaciers = sid_glaciers.drop(labels=pd.date_range('2013-01-01', '2015-01-01', freq='AS'), axis=0)
-sid_glaciers = pd.concat((sid_glaciers, sid_1315))
-
 
 ## Now convert to monthly time series...
 
 # First forward fill the annual values onto monthly
 sid_glaciers_monthly = sid_glaciers.resample('1MS').ffill()
-# Currently ends on 2015-01-01, push out to 2015-12-01 
+# Currently ends on 2016-01-01, push out to 2016-12-01 
 sid_glaciers_monthly = sid_glaciers_monthly \
-	.reindex(pd.date_range('1958-01-01', '2015-12-01', freq='1MS')) \
+	.reindex(pd.date_range('1958-01-01', '2016-12-01', freq='1MS')) \
 	.fillna(method='ffill')
 
-# For non-king glaciers, now calculate average %contrib a month from King series
+# For non-king glaciers (the few remaining Rignot basins), now calculate average %contrib a month from King series
 monthly_dist = monthly_perc.groupby(monthly_perc.index.month).mean().mean(axis=1) / 100
 # Apply this scaling to the annual values
 sid_glaciers_monthly_generic = sid_glaciers_monthly \
@@ -536,16 +409,7 @@ sid_glaciers_monthly = pd.concat((sid_glaciers_monthly_generic, pd.DataFrame(sid
 # Calculate final annual dataset
 sid_glaciers_annual = sid_glaciers_monthly.resample('1AS').sum()
 
-if plot_figs:
-	plt.figure()
-	plt.plot(glaciers_combined.index, glaciers_combined.sum(axis=1), linewidth=4, marker='s', label='Combined (Rignot.Sc, Enderlin, King)', alpha=0.6)
-	plt.plot(basin_q_rignot.index, basin_q_rignot.sum(axis=1), marker='x', label='Rignot', alpha=0.6)
-	plt.plot(glaciers_rignot_sc.index, glaciers_rignot_sc.sum(axis=1), marker='+', label='Rignot scaled (all glaciers)', alpha=0.6)
-	plt.plot(enderlin.index, enderlin.sum(axis=1), marker='^', label='Enderlin', alpha=0.6)
-	plt.plot(rignot_only_enderlin.index, rignot_only_enderlin.sum(axis=1), marker='x', label='Rignot scaled (only for Enderlin glaciers)', alpha=0.6)
-	plt.plot(vals2012.index, vals2012.Discharge, marker='*', label='Bamber2012', alpha=0.6)
-	plt.plot(sid_glaciers_annual.index, sid_glaciers_annual.sum(axis=1), marker='*', label='final monthly agg. to annual', alpha=0.6)
-	plt.legend()
+
 
 
 # Define efflux points for remaining basins
@@ -559,12 +423,12 @@ store['basin4'] = [279771.470, -881804.231]
 xtra_basin_locs = pd.DataFrame(store).T
 xtra_basin_locs.columns = ['x', 'y']
 geometry = [Point(xy) for xy in zip(xtra_basin_locs.x, xtra_basin_locs.y)]
-xtra_basins = gpd.GeoDataFrame({'enderlin_name':xtra_basin_locs.index}, geometry=geometry, crs=pstere)
+xtra_basins = gpd.GeoDataFrame({'king_name':xtra_basin_locs.index}, geometry=geometry, crs=pstere)
 
 
 ## Prepare coordinates for export
-complete_outlet_points = pd.concat([enderlin_pstere, xtra_basins], axis=0, ignore_index=True)
-complete_outlet_points.index = complete_outlet_points.enderlin_name
+complete_outlet_points = pd.concat([king_pstere, xtra_basins], axis=0, ignore_index=True)
+complete_outlet_points.index = complete_outlet_points.king_name
 complete_outlet_points_geo = complete_outlet_points.to_crs({'init':'epsg:4326'})
 # First sort alphabetically
 complete_outlet_points_geo = complete_outlet_points_geo.sort_index(axis=0)
@@ -580,210 +444,92 @@ sid_glaciers_monthly = sid_glaciers_monthly.reindex_axis(sorted(sid_glaciers_mon
 # Add lat/lon rows to top of frame
 to_export = pd.concat((coords_df, sid_glaciers_monthly), axis=0)
 # Export, to 1dp inline with source datasets
-to_export.to_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/sid_glaciers_monthly_coords.csv',
+to_export.to_csv(folder_path + 'outputs_Nov2017/sid_glaciers_monthly_coords.csv',
 	float_format='%.3f', date_format='%Y-%m-%d')
 
 
 
 ### ==========================================================================
 ### Gridding
-## The initial distance lookups are copied from arctic_runoff_routing.py
+grid = False
 
-## Create look-up tree of coastline pixels
-# Load the 'distance from the ocean' raster
-dist_land = georaster.SingleBandRaster('/scratch/process/ROUTING_distances_landandice.tif')
-coast = np.where(dist_land.r == 1, 1, 0)
+if grid:
+	## The initial distance lookups are copied from arctic_runoff_routing.py
+	print('Gridding . . . ')
+	## Create look-up tree of coastline pixels
+	# Load the 'distance from the ocean' raster
+	dist_land = georaster.SingleBandRaster(folder_path + 'outputs_Nov2017/ROUTING_distances_landandice.tif')
+	coast = np.where(dist_land.r == 1, 1, 0)
 
-# In pixel space, create a 2-d array of coastline pixels
-x = np.arange(0, dist_land.nx)
-y = np.arange(0, dist_land.ny)
-xi, yi = np.meshgrid(x, y)
-xp = xi[np.where(coast == 1, True, False)].flatten()
-yp = yi[np.where(coast == 1, True, False)].flatten()
-coast_points = np.zeros((len(xp), 2))
-coast_points[:, 0] = yp
-coast_points[:, 1] = xp
+	# In pixel space, create a 2-d array of coastline pixels
+	x = np.arange(0, dist_land.nx)
+	y = np.arange(0, dist_land.ny)
+	xi, yi = np.meshgrid(x, y)
+	xp = xi[np.where(coast == 1, True, False)].flatten()
+	yp = yi[np.where(coast == 1, True, False)].flatten()
+	coast_points = np.zeros((len(xp), 2))
+	coast_points[:, 0] = yp
+	coast_points[:, 1] = xp
 
-# Create the coast lookup tree
-tree = spatial.cKDTree(coast_points)
-
-
-sid_grid = np.zeros((len(sid_glaciers_monthly), dist_land.ny, dist_land.nx))
-
-# Use 1dp rounded version of dataset
-sid_glaciers_monthly_round = round(sid_glaciers_monthly, 3)
-
-# Add SID from each location in turn
-for ix, row in complete_outlet_points.iterrows():
-	# First convert to pixel coordinates
-	x_px, y_px = dist_land.coord_to_px(row['geometry'].x, row['geometry'].y)
-	# Now find nearest coastal pixel
-	distance, index = tree.query((y_px, x_px), k=1)
-	cpy, cpx = coast_points[index, :]
-	# Some outlets discharge within same 5 km pixel, hence +=
-	sid_grid[:, int(cpy), int(cpx)] += sid_glaciers_monthly_round[row['enderlin_name']]
+	# Create the coast lookup tree
+	tree = spatial.cKDTree(coast_points)
 
 
-## Convert to netCDF
-coords = {'TIME':runoff.TIME, 'Y':runoff.Y, 'X':runoff.X}
-# Convert to DataArray, integer
-sid = xr.DataArray(sid_grid, coords=coords, dims=['TIME', 'Y', 'X'],
-	encoding={'dtype':'int16', 'scale_factor':0.001, 'zlib':True})
-sid.name = 'Solid ice discharge'
-sid.attrs['long_name'] = 'Solid ice discharge'
-sid.attrs['units'] = 'km3'
-sid.attrs['grid_mapping'] = 'polar_stereographic'
+	sid_grid = np.zeros((len(sid_glaciers_monthly), dist_land.ny, dist_land.nx))
 
-ds = xr.Dataset({'solid_ice':sid, 'lon':runoff.lon, 'lat':runoff.lat, 
-	'polar_stereographic':runoff.polar_stereographic})
+	# Use 1dp rounded version of dataset
+	sid_glaciers_monthly_round = round(sid_glaciers_monthly, 3)
 
-# Main metadata
-ds.attrs['Conventions'] = 'CF-1.4'
-ds.attrs['history'] = 'This NetCDF generated using bitbucket atedstone/fwf/solid_ice_discharge.py using data provided by Eric Rignot, Ellyn Enderlin and Michalea King'
-ds.attrs['institution'] = 'University of Bristol (Andrew Tedstone)'
-ds.attrs['title'] = 'Monthly solid ice discharge from Greenland on a projected grid'
+	print('Iterating pixels . . . ')
+	# Add SID from each location in turn
+	for ix, row in complete_outlet_points.iterrows():
+		# First convert to pixel coordinates
+		x_px, y_px = dist_land.coord_to_px(row['geometry'].x, row['geometry'].y)
+		# Now find nearest coastal pixel
+		distance, index = tree.query((y_px, x_px), k=1)
+		cpy, cpx = coast_points[index, :]
+		# Some outlets discharge within same 5 km pixel, hence +=
+		sid_grid[:, int(cpy), int(cpx)] += sid_glaciers_monthly_round[row['king_name']]
 
-# Additional geo-referencing
-ds.attrs['nx'] = float(dist_land.nx)
-ds.attrs['ny'] = float(dist_land.ny)
-ds.attrs['xmin'] = float(np.round(np.min(runoff.X), 0))
-ds.attrs['ymax'] = float(np.round(np.max(runoff.Y), 0))
-ds.attrs['spacing'] = 5000.
+	print('Saving grids . . . ')
+	## Convert to netCDF
+	coords = {'TIME':runoff.TIME, 'Y':runoff.Y, 'X':runoff.X}
+	# Convert to DataArray, integer
+	sid = xr.DataArray(sid_grid, coords=coords, dims=['TIME', 'Y', 'X'],
+		encoding={'dtype':'int16', 'scale_factor':0.001, 'zlib':True, '_FillValue':-9999})
+	sid.name = 'Solid ice discharge'
+	sid.attrs['long_name'] = 'Solid ice discharge'
+	sid.attrs['units'] = 'km3'
+	sid.attrs['grid_mapping'] = 'polar_stereographic'
 
-# NC conventions metadata for dimensions variables
-ds.X.attrs['units'] = 'meters'
-ds.X.attrs['standard_name'] = 'projection_x_coordinate'
-ds.X.attrs['point_spacing'] = 'even'
-ds.X.attrs['axis'] = 'X'
+	ds = xr.Dataset({'solid_ice':sid, 'lon':runoff.lon, 'lat':runoff.lat, 
+		'polar_stereographic':runoff.polar_stereographic})
 
-ds.Y.attrs['units'] = 'meters'
-ds.Y.attrs['standard_name'] = 'projection_y_coordinate'
-ds.Y.attrs['point_spacing'] = 'even'
-ds.Y.attrs['axis'] = 'Y'
+	# Main metadata
+	ds.attrs['Conventions'] = 'CF-1.4'
+	ds.attrs['history'] = 'This NetCDF generated using bitbucket atedstone/fwf/solid_ice_discharge.py using data provided by Michalea King, Ian Howat and Eric Rignot'
+	ds.attrs['institution'] = 'University of Bristol (Andrew Tedstone)'
+	ds.attrs['title'] = 'Monthly solid ice discharge from Greenland on a projected grid'
 
-ds.TIME.attrs['standard_name'] = 'time'
-ds.TIME.attrs['axis'] = 'TIME'
+	# Additional geo-referencing
+	ds.attrs['nx'] = float(dist_land.nx)
+	ds.attrs['ny'] = float(dist_land.ny)
+	ds.attrs['xmin'] = float(np.round(np.min(runoff.X), 0))
+	ds.attrs['ymax'] = float(np.round(np.max(runoff.Y), 0))
+	ds.attrs['spacing'] = 5000.
 
-ds.to_netcdf('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs/FWF17_solidice.nc', format='NetCDF4')
+	# NC conventions metadata for dimensions variables
+	ds.X.attrs['units'] = 'meters'
+	ds.X.attrs['standard_name'] = 'projection_x_coordinate'
+	ds.X.attrs['point_spacing'] = 'even'
+	ds.X.attrs['axis'] = 'X'
 
+	ds.Y.attrs['units'] = 'meters'
+	ds.Y.attrs['standard_name'] = 'projection_y_coordinate'
+	ds.Y.attrs['point_spacing'] = 'even'
+	ds.Y.attrs['axis'] = 'Y'
 
+	ds.TIME.attrs['standard_name'] = 'time'
+	ds.TIME.attrs['axis'] = 'TIME'
 
-##############################################################################
-
-# # Compare the King and Enderlin datasets for common glaciers
-# king_annual_glacier_flux = monthly_flux.resample('1AS').sum()
-# for ne, nk in zip(joined.enderlin_name, joined.king_name):
-# 	plt.figure()
-# 	plt.title(ne)
-# 	plt.plot(enderlin.index, enderlin[ne], 'r')
-# 	plt.plot(king_annual_glacier_flux.index, king_annual_glacier_flux[nk], 'b')	
-
-
-
-
-
-"""
-##Previous attempts to join all three time series together using glacier names (NOT containing basins)
-
-rignot_raw = pd.read_excel('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/Bamber+co-ords_reformatted.xlsx', index_col='rignot_name')
-ix = [pd.datetime(y, 1, 1) for y in rignot_raw.columns[2:]]
-rignot = rignot_raw.drop(rignot_raw.columns[0], axis=1)
-rignot = rignot.drop(rignot_raw.columns[1], axis=1)
-rignot = rignot.T
-rignot.index = ix
-
-rignot_glaciers = []
-for c in rignot.columns:
-	c = c.lower().replace(' ', '') + '_discharge'
-	rignot_glaciers.append(c)
-
-rignot.columns = rignot_glaciers
-
-# Coordinates in spreadsheet are i,j IDL format, bamber grid, 2.5 km spacing
-# Use lookup matrices to identify pstere coordinates
-bamber_grid_y, bamber_grid_x = np.mgrid[-3400000:-600000:2500, -800000:700000:2500]
-
-# For debugging use - can write out a raster grid to check it
-# grid_proj = pyproj.Proj('+proj=stere +lat_0=90 +lat_ts=71 +lon_0=-39 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs')
-# trans = (bamber_grid_x[0,0], (bamber_grid_x[0,1]-bamber_grid_x[0,0]), 0, bamber_grid_y[0,0], 0, (bamber_grid_y[1,0]-bamber_grid_y[0,0]))
-# georaster.simple_write_geotiff(
-# 	'bamber_grid_y.tif',
-# 	bamber_grid_y,
-# 	trans,
-# 	proj4=grid_proj.srs,
-# 	dtype=gdal.GDT_Float32
-# 	)
-
-rignot_x = []
-rignot_y = []
-for x, y in zip(rignot_raw['x'], rignot_raw['y']):
-	rignot_y.append(bamber_grid_y[y, x])
-	rignot_x.append(bamber_grid_x[y, x])
-
-rignot_locs = pd.DataFrame({'x':rignot_x, 'y':rignot_y})
-# stored as kms, so convert to metres
-
-rignot_locs.index = rignot_glaciers
-geometry = [Point(xy) for xy in zip(rignot_locs.x, rignot_locs.y)]
-rignot_proj4 = '+proj=stere +lat_0=90 +lat_ts=71 +lon_0=-39 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs'
-rignot_bamber = gpd.GeoDataFrame({'rignot_name':rignot_locs.index}, crs=rignot_proj4, geometry=geometry)
-rignot_geo = rignot_bamber.to_crs({'init':'epsg:4326'})
-rignot_geo.to_file('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/rignot_locs.shp')
-rignot_pstere = rignot_geo.to_crs(pstere)
-
-rignot_equiv = []
-rignot_equiv_ix = []
-for ix, row in rignot_pstere.iterrows():
-	dists = enderlin_pstere.distance(row.geometry)
-	if dists.min() < 50000:
-		ix_min = dists.argmin()
-		equiv_label = enderlin_pstere.loc[ix_min].enderlin_name
-		print('Rignot: %s, Enderlin: %s' % (row.rignot_name, equiv_label))
-		rignot_equiv.append(row.rignot_name)
-		rignot_equiv_ix.append(equiv_label)
-	else:
-		rignot_equiv.append(np.nan)
-		rignot_equiv_ix.append(np.nan)
-
-
-geodf_all = enderlin_pstere.merge(pd.DataFrame({'enderlin_name':rignot_equiv}, index=rignot_equiv), on='enderlin_name')
-
-enderlin_master = pd.DataFrame({'enderlin_dummy':1}, index=enderlin_pstere.enderlin_name)
-geodf_all = pd.merge(
-	enderlin_master, 
-	pd.DataFrame({'rignot_name':rignot_equiv}, index=rignot_equiv_ix), 
-	how='left', 
-	left_index=True,
-	right_index=True)
-
-geodf_all = pd.merge(
-	geodf_all, 
-	pd.DataFrame({'king_name':king_equiv}, index=king_equiv_ix), 
-	how='left', 
-	left_index=True,
-	right_index=True)
-
-geodf_all = geodf_all.drop('enderlin_dummy', axis=1)
-geodf_all = geodf_all.drop('geometry', axis=1)
-
-geodf_all.to_csv('/home/at15963/Dropbox/work/papers/bamber_fwf/ice_discharge/glacier_names_lookup.csv')
-"""
-
-"""
-##old rignot basin merging logic
-
-
-rignot_names_basins = pd.Series(rignot.index)
-rignot_names_basins.index = rignot_glaciers
-rignot_names_basins = rignot_names_basins[rignot_names_basins.notnull()]
-# Convert from float to string with basin prefix
-rignot_names_basins = pd.Series(['basin{:.0f}'.format(n) for n in rignot_names_basins], index=rignot_names_basins.index)
-# Un-intuitive: if ends with b then returns true, otherwise null, so want to retain null values
-#rignot_names_basins = rignot_names_basins[rignot_names_basins.str.endswith('b').isnull()]
-grouped = rignot_names_basins.groupby(rignot_names_basins)
-store = {}
-for basin, glaciers in grouped:
-	q = rignot.filter(items=glaciers.index).sum(axis=1)
-	store[basin] = q
-basin_q_rignot = pd.DataFrame(store)
-"""
+	ds.to_netcdf(folder_path + 'outputs_Nov2017/FWF17_solidice_RACMO2.3p2.nc', format='NetCDF4')
