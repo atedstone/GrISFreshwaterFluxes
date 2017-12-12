@@ -135,6 +135,7 @@ king_names_basins.loc[king_names_basins.basin.str.contains('basin48'), 'basin'] 
 king_names_basins.loc[king_names_basins.basin.str.contains('basin49'), 'basin'] = 'basin12'
 # Allocate all glaciers in basin38_* basins to basin38
 king_names_basins.loc[king_names_basins.basin.str.contains('basin38_'), 'basin'] = 'basin38'
+king_names_basins.loc[king_names_basins.basin.str.contains('basin29'),  'basin'] = 'basin38'
 
 
 ## Aggregate King measurements to basin outputs
@@ -191,11 +192,12 @@ glacier_basin_contrib = pd.concat({
 # Basins without King data get set to NaN...
 basin_scaling = basin_q_rignot['2000':'2009'].mean() - basin_q_king['2000':'2009'].mean()
 basin_q_rignot_sc = basin_q_rignot - basin_scaling
-# ...so substitute these back in using mean basin scaling
+# ...so substitute original values back in.
+# using mean of basin-by-basin scaling values can lead to negative values so 
+# we don't do that.
 # n.b. some null columns remain because Rignot dataset does not
 # contain data for every single basin that they defined.
-basin_q_rignot_sc[basin_q_rignot_sc.isnull()] = basin_q_rignot - basin_scaling.mean()
-
+basin_q_rignot_sc[basin_q_rignot_sc.isnull()] = basin_q_rignot 
 
 ## facet plot of basin-by-basin comparisons
 if plot_figs:
@@ -208,7 +210,7 @@ if plot_figs:
 			plt.plot(basin_q_rignot.index, basin_q_rignot[b], 'blue')
 			plt.plot(basin_q_king.index, basin_q_king[b], 'red')
 			plt.plot(basin_q_rignot_sc.index, basin_q_rignot_sc[b], '--b')
-			plt.xlim('2000-01-01', '2015-12-31')
+			plt.xlim('2000-01-01', '2016-12-31')
 			n += 1
 	plt.tight_layout()
 	plt.savefig(folder_path + 'outputs_Nov2017/figures/basins_comparison.pdf')	
@@ -251,28 +253,34 @@ glaciers_rignot_sc = pd.concat(store, axis=1)
 glaciers_rignot_sc = glaciers_rignot_sc.dropna(axis=1, how='all')
 
 
-## Replace Rignot values with King or Enderlin from 2000 onward.
+## Replace Rignot values with King from 2000 onward.
 from copy import deepcopy
 glaciers_combined = deepcopy(glaciers_rignot_sc)
 glaciers_combined = glaciers_combined.reindex(pd.date_range('1958-01-01', '2016-01-01', freq='AS'))
-for glacier in glaciers_rignot_sc.columns:
-	# Insert King data where possible, 2000:2015
-	if glacier in king.columns: 
+n = 0
+for glacier in glaciers_combined.columns:
+	# Insert King data where possible, 2000:2016
+	if glacier in king_annual_glacier_flux.columns: 
+		print(glacier)
+		n += 1
 		glaciers_combined.loc['2000':'2016', glacier] = king_annual_glacier_flux[glacier]
-	else:
-		print('NOTADDED: ' + glacier)
+print(str(n) + ' glaciers added')
 
-
-## Enderlin measured a few extra glaciers (basins) not in Rignot - add them in
+## King measured a few extra glaciers (basins) not in Rignot - add them in
 # E.g. 'basin51' near Thule is identified in Rignot shapefile, but Rignot does
 # not provide any discharge estimates for the basin.
-# At time of this comment, all these only_enderlin glaciers are in basins 51, 52.
 only_king = []
 for glacier in king_annual_glacier_flux.columns:
 	if glacier not in glaciers_combined.columns:
 		glaciers_combined = pd.concat((glaciers_combined, king_annual_glacier_flux[glacier]), axis=1)
 		only_king.append(king_annual_glacier_flux[glacier])
 # Need to double-check for accidental duplicates		
+
+# sub in missing values in Rignot-only basins, 2010 onwards
+glaciers_combined[glaciers_combined['2010':'2016'].isnull()]
+for basin in glaciers_combined.filter(like='basin').columns:
+	mean0009 = glaciers_combined.loc['2000':'2009', basin].mean()
+	glaciers_combined.loc['2010':'2016', basin] = mean0009
 
 
 ## Optional visualisation of results so far...
@@ -282,16 +290,23 @@ vals2012 = pd.read_csv(folder_path + 'Annual_fluxes_2012paper.txt',
 vals2012.index = pd.date_range('1958-01-01', '2010-01-01', freq='1AS')
 
 # Get only the rignot 'glaciers' which King has data for
-rignot_only_king = glaciers_rignot_sc.filter(items=king.columns)
+rignot_only_king = glaciers_rignot_sc.filter(items=king_annual_glacier_flux.columns)
 
 if plot_figs:
 	plt.figure(figsize=(8,6))
-	plt.plot(glaciers_combined.index, glaciers_combined.sum(axis=1), linewidth=4, marker='s', label='Combined (Rignot.Sc, Enderlin, King)', alpha=0.6)
-	plt.plot(basin_q_rignot.index, basin_q_rignot.sum(axis=1), marker='x', label='Rignot', alpha=0.6)
-	plt.plot(glaciers_rignot_sc.index, glaciers_rignot_sc.sum(axis=1), marker='+', label='Rignot scaled (all glaciers)', alpha=0.6)
-	plt.plot(king_annual_glacier_flux.index, king_annual_glacier_flux.sum(axis=1), marker='^', label='king', alpha=0.6)
-	plt.plot(rignot_only_king.index, rignot_only_king.sum(axis=1), marker='x', label='Rignot scaled (only for king glaciers)', alpha=0.6)
-	plt.plot(vals2012.index, vals2012.Discharge, marker='*', label='Bamber2012', alpha=0.6)
+	plt.plot(glaciers_combined.index, glaciers_combined.sum(axis=1), 
+		linewidth=4, marker='s', label='Combined (Rignot.Sc, King)', 
+		alpha=0.6)
+	plt.plot(basin_q_rignot.index, basin_q_rignot.sum(axis=1), marker='x', 
+		label='Rignot', alpha=0.6)
+	plt.plot(glaciers_rignot_sc.index, glaciers_rignot_sc.sum(axis=1), 
+		marker='+', label='Rignot scaled (all glaciers)', alpha=0.6)
+	plt.plot(king_annual_glacier_flux.index, king_annual_glacier_flux.sum(axis=1), 
+		marker='^', label='king', alpha=0.6)
+	plt.plot(rignot_only_king.index, rignot_only_king.sum(axis=1), marker='x', 
+		label='Rignot scaled (only for king glaciers)', alpha=0.6)
+	plt.plot(vals2012.index, vals2012.Discharge, marker='*', 
+		label='Bamber2012', alpha=0.6)
 	plt.legend()
 	plt.savefig(folder_path + 'outputs_Nov2017/figures/discharge_ds_comparison.pdf')
 
@@ -420,6 +435,7 @@ store['basin2'] = [-84384.416, -908161.157]
 store['basin3'] = [-4775.744, -911388.535]
 store['basin35'] = [338940.078, -972708.729]
 store['basin4'] = [279771.470, -881804.231]
+store['basin29'] = [-360899.535,-1575484.349]
 xtra_basin_locs = pd.DataFrame(store).T
 xtra_basin_locs.columns = ['x', 'y']
 geometry = [Point(xy) for xy in zip(xtra_basin_locs.x, xtra_basin_locs.y)]
@@ -443,7 +459,8 @@ coords_df = pd.DataFrame(np.array([np.array(row_x), np.array(row_y)]),
 sid_glaciers_monthly = sid_glaciers_monthly.reindex_axis(sorted(sid_glaciers_monthly.columns), axis=1)
 # Add lat/lon rows to top of frame
 to_export = pd.concat((coords_df, sid_glaciers_monthly), axis=0)
-# Export, to 1dp inline with source datasets
+# Export
+# Use 3dp to maintain monthly 'precision' even though src dataset only at 1dp
 to_export.to_csv(folder_path + 'outputs_Nov2017/sid_glaciers_monthly_coords.csv',
 	float_format='%.3f', date_format='%Y-%m-%d')
 
@@ -451,7 +468,7 @@ to_export.to_csv(folder_path + 'outputs_Nov2017/sid_glaciers_monthly_coords.csv'
 
 ### ==========================================================================
 ### Gridding
-grid = False
+grid = True
 
 if grid:
 	## The initial distance lookups are copied from arctic_runoff_routing.py
