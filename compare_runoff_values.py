@@ -73,3 +73,20 @@ ncaa_runoff['time'] = pd.date_range('1958-01-01', '2015-12-31', freq='1MS')
 figure(),ncaa_runoff.where(ncaa_masks.Icemask == 1).sum(dim=('x','y')).resample(time='1AS').sum().plot()
 figure(),(ncaa_runoff.sel(time=slice('2004','2015')).where(ncaa_masks.Icemask == 1).resample(dim='time', freq='1AS', how='sum')).plot(col='time', col_wrap=5, vmin=0, vmax=500)
 
+
+
+### South CAA
+scaa = xr.open_dataset('runoff.1958-2015.BN_RACMO2.3p1_ZGRN11_SCAA.MM.nc', decode_times=False, chunks={'time':2})
+scaa_masks = xr.open_dataset('CAA_topo_icemask_lsm_lon_lat_CAA_South_SCAA.nc')
+
+
+## Uncorrupted NCAA
+ncaa = xr.open_dataset('NCAA_20180104/runoff.1958-2015.BN_RACMO2.3p1_NCAA.MM_20180104.nc', decode_times=False)
+#ncaa = ncaa.drop('lon')
+#ncaa = ncaa.drop('lat')
+ncaa['x'] = ncaa_masks['x']
+ncaa['y'] = ncaa_masks['y']
+ncaa_runoff = ncaa.runoff.rename({'lon':'x', 'lat':'y'})
+ncaa_runoff = ncaa_runoff.assign_coords(x=ncaa_masks['x'])
+ncaa_runoff = ncaa_runoff.assign_coords(y=ncaa_masks['y'])
+ncaa_runoff['time'] = pd.date_range('1958-01-01', '2015-12-31', freq='1MS')
