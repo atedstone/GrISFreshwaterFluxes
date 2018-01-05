@@ -25,6 +25,7 @@ from osgeo import gdal, osr
 import math
 from scipy.ndimage import morphology as sc_morph
 import subprocess
+import datetime as dt
 
 import georaster
 
@@ -63,6 +64,13 @@ ice_mask = georaster.SingleBandRaster(ice_mask_uri)
 ice_mask.r = np.where(ice_mask.r >= 1, 1, 0)
 # Fill the small holes which arise from the downsampling - used later
 ice_mask_filled = sc_morph.binary_fill_holes(ice_mask.r)
+# Remove Greenland non-grounded ice in order to avoid double-counting
+grn_mask = georaster.SingleBandRaster(PROCESS_DIR + 'mask_GrIS_Promicemask_arctic.tif')
+grounded_grn_mask = georaster.SingleBandRaster(PROCESS_DIR + 'mask_GrIS_grounded_ice_arctic.tif')
+ice_mask.r = np.where((grn_mask.r > 0) & (grounded_grn_mask == 0), 0, ice_mask.r) 
+# Also remove from filled mask - have to do this after filling otherwise grounded 
+# holes would get filled back in!
+ice_mask_filled = np.where((grn_mask.r > 0) & (grounded_grn_mask == 0), 0, ice_mask_filled) 
 ice_mask.save_geotiff(PROCESS_DIR + 'mask_icemask_mosaic_binary.tif')
 
 ## Only use topography of ice surfaces - route to ice sheet + cap margins.
@@ -254,6 +262,9 @@ else:
 n = 0
 ice_r_pre = []
 ice_r_post = []
+
+ncaa_mask_5km = georaster.SingleBandRaster('/scratch/process/project_RACMO/mask_NCAA_Icemask_arctic.tif')
+
 for date in dates:
 	print(date)
 	# Import runoff from reprojected GeoTIFF
@@ -261,6 +272,15 @@ for date in dates:
 	r_month = georaster.SingleBandRaster(fname).r 
 	# Convert mmWE to flux per grid cell
 	r_month = np.where(r_month > 0, r_month * (5*5) / 1.0e6, 0)  / scale_factors 
+
+	# !! KLUDGE --------------------------------------------------------------
+	# If 2016, apply scaling factor to NCAA region
+	# Scaling factor can be determined using caa_scale_p2_data.py
+	if date >= dt.datetime(2016, 1, 1):
+		ncaa_scaling = 1.5202
+		r_month = np.where(ncaa_mask_5km.r == 1, r_month * ncaa_scaling, r_month)
+	# !! END KLUDGE ----------------------------------------------------------
+	
 	# Get ice component of runoff (USING FILLED MASK! - IMPORTANT)
 	r_month_ice = np.where(ice_mask_filled == 1, r_month, np.nan)
 	# Calculate runoff value pre-routing for debugging
@@ -411,7 +431,7 @@ ds.Y.attrs['axis'] = 'Y'
 ds.TIME.attrs['standard_name'] = 'time'
 ds.TIME.attrs['axis'] = 'TIME'
 
-ds.to_netcdf('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs_Nov2017/FWF17_runoff_RACMO2.3p2.nc', format='NetCDF4')
+ds.to_netcdf('/home/at15963/Dropbox/work/papers/bamber_fwf/outputs_Jan2018/FWF17_runoff_RACMO2.3p2.nc', format='NetCDF4')
 
 pre = pd.Series(ice_r_pre, index=dates)
 pre.to_csv(PROCESS_DIR + 'runoff_monthly_totals_pre_routing.csv')
