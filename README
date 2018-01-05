@@ -78,3 +78,17 @@ The regional masks rema
     - The solution is not to fill these holes at all. Instead, leave them in place and then just route the water that drains into them via the usual euclidean distance method to the coast. This conserves mass nearly precisely in the few tests I did (+/- a couple of km3 or so).
 
 * The 1km Greenland runoff data show substantially more runoff, especially in 2012. The increases are already present in Brice's 1km data, i.e. the increases compared to FWFv1 are not due to problems with my routing routines.
+
+
+## Order of scripts
+
+1. allocate_coast_to_basin.py, project_bamber_basins.py
+2. project_RACMO.r
+3. racmohires2gtiff.py with appropriate options set
+4. caa_scale_p2_data.py
+5. arctic_runoff_routing.py
+6. greenland_runoff_contribution.py
+7. solid_ice_discharge.py
+8. stats_for_paper.py
+
+compare_runoff_values.py is for separate sanity checking.
