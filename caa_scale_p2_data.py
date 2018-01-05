@@ -2,13 +2,11 @@
 
 Scale CAA 2016 values
 
-Run this script only once racmohires2gtiff.py has been run (which produces
-arctic-domain-wide mosaics with 1 km data included).
-
-Make sure that you only run this script once! It modifies gtiffs in place so
-the more times you run it, the more times the scaling will be applied...
-
-equivalent to months 697-708 inclusive.
+RACMO2.3p1 @1km CAA are available for 1958-2015 only.
+We need to extend the time series to end of 2016 so this means using RACMO2.3p2
+at 11 km resolution, which is known to not capture all runoff.
+Compute a scaling factor to apply to the 2016 RACMO2.3p2 data by comparing
+the model outputs for 2011-2015.
 """
 
 import xarray as xr
