@@ -33,7 +33,8 @@ do_gris = False
 do_ncaa = False
 do_scaa = False
 do_mosaic = False
-do_masks = True
+do_masks = False
+do_grounded_ice = True
 
 ### Greenland 1 km
 if do_gris:
@@ -67,15 +68,17 @@ if do_gris:
 
 ### NCAA 
 if do_ncaa:
-	runoff = xr.open_dataset('/scratch/L0data/RACMO/Nov2017/runoff.1958-2015.BN_RACMO2.3p1_ZGRN11_NCAA.MM.nc',
+	runoff = xr.open_dataset('/scratch/L0data/RACMO/Nov2017/NCAA_20180104/runoff.1958-2015.BN_RACMO2.3p1_NCAA.MM_20180104.nc',
 		decode_times=False, chunks={'time':10})
+	# Load masks in order to get coordinates - not in provided runoff file!
+	ncaa_masks = xr.open_dataset('/scratch/L0data/RACMO/Nov2017/CAA_topo_icemask_lsm_lon_lat_CAA_North_NCAA.nc')
 	times = pd.date_range('1958-01-01', '2015-12-31', freq='1MS')
 	#runoff['time'] = times
 
 	proj4 = '+init=epsg:3413'
 	# extent and geotrans had to be calculated as not available in ncdf
-	extent = [runoff.x[0], runoff.y[-1]-1000, runoff.x[-1]-1000, runoff.y[0]]
-	geotrans = (runoff.x[0],1000,0,runoff.y[-1]-1000,0,-1000)
+	extent = [ncaa_masks.x[0], ncaa_masks.y[-1]-1000, ncaa_masks.x[-1]-1000, ncaa_masks.y[0]]
+	geotrans = (ncaa_masks.x[0],1000,0,ncaa_masks.y[-1]-1000,0,-1000)
 
 	n = 0
 	for date in times:
@@ -260,7 +263,31 @@ if do_masks:
 
 
 	
+## Export Greenland grounded ice mask
+if do_grounded_ice:
+	gris_masks_complete = xr.open_dataset('/scratch/L0data/RACMO/Nov2017/grounded_ice_mask/Icemask_Topo_Iceclasses_lon_lat_average_1km.nc',
+		decode_times=False)
 
+	# The X and Y fields in the masks nc are broken, use runoff nc file instead
+	nc = xr.open_dataset('%s/%s' %('/scratch/L0data/RACMO/Nov2017', 'runoff.1958-2016.BN_RACMO2.4_FGRN11_GrIS.MM.nc'), decode_times=False)
+	extent = [float(nc.lon[0]), float(nc.lat[-1]-1000), float(nc.lon[-1]-1000), float(nc.lat[0])]
+	geotrans = (float(nc.lon[0]),1000,0,float(nc.lat[-1]-1000),0,-1000)
+	proj4 = '+init=epsg:3413'
 
+	# Write a geotiff so that GDAL can use it
+	data = np.flipud(gris_masks_complete.grounded_ice.values.squeeze())
+	tif_fn = PROCESS_DIR + '/mask_GrIS_grounded_ice.tif' 
+	georaster.simple_write_geotiff(
+		tif_fn,
+		data,
+		geotrans,
+		proj4=proj4,
+		dtype=gdal.GDT_Int16
+		)
 
-
+	# Write to an arctic-wide geotiff so we can use it in arctic_runoff_routing.py
+	cmd = 'gdalwarp -overwrite -te -1780479.825 -3989808.111 1979520.175 -64808.111 -tr 5000 5000 '
+	gen_fn = PROCESS_DIR + '/mask_GrIS_grounded_ice' 
+	full_cmd = '%s %s.tif %s_arctic.tif' %(cmd, gen_fn, gen_fn)
+	print('**CMD: ' + full_cmd)
+	subprocess.call(full_cmd, shell=True)
