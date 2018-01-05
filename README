@@ -66,7 +66,6 @@ These contain the higher-res (1km-derived) topo and ice masks respectively.
 
 From this point on it is therefore important not to use 11 km base masks in application to any 1km downsampled areas! (the bounds will be wrong).
 
-The regional masks rema
 
 
 ## Main differences in Nov/Dec 2017 update
@@ -89,6 +88,23 @@ The regional masks rema
 5. arctic_runoff_routing.py
 6. greenland_runoff_contribution.py
 7. solid_ice_discharge.py
-8. stats_for_paper.py
+8. export_combined_nc.py
+9. stats_for_paper.py
 
 compare_runoff_values.py is for separate sanity checking.
+
+
+## Summary of issues encountered over Dec 2017/Jan 2018
+
+First, there was some confusion associated with the 'very high' fluxes from Greenland compared to published data. The reason for this is that our routed Greenland fluxes include not just the ice sheet itself but also all other ice masses on the Greenland land mass.
+
+Second, we noticed that NCAA fluxes were too low in our early Dec 2017 version of our dataset. We tracked this down to corrupted NCAA RACMO2.3p1 @ 1km runoff grids, which resulted in a geo-referencing offset. Brice provided a new, uncorrupted dataset which we re-mosaiced and then re-ran the routing, solving this problem.
+
+Third, we identified a problem with the RACMO2.3p2 11km undownscaled data over the North Canadian Arctic, whereby the estimates were too low. This is only a problem for 2016, as we have RACMO2.3p1@1km for 1958-2015. We therefore calculated a scaling factor to apply to the 2016 runoff fields, which is applied just before the runoff fields are routed in arctic_runoff_routing.py.
+
+Other more minor issues that were fixed in this release (notionally labelled FWF17.v3):
+
+* Ungrounded Greenland ice was removed from the runoff fields, using a new mask provided by Brice Noel. This is undertaken by modifying the appropriate mask in-memory during execution of arctic_runoff_routing.py.
+* A constant 10 Gt/yr solid ice discharge was added to the far north of the GrIS.
+* The runoff-discharge regression now uses GrIS-only runoff (whereas before it used pan-Greenland runoff), and 1958 has been removed because we believe there is something suspect about the solid ice discharge value for this year.
+* Whole dataset now provided as a single netcdf file.
