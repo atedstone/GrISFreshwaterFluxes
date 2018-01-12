@@ -43,4 +43,8 @@ merged.attrs = runoff.attrs
 merged.attrs.pop('history')
 merged.attrs['title'] = 'Monthly freshwater fluxes to the ocean across the Arctic, 1958-2016'
 
+merged.attrs['description'] = 'This is the dataset that underlies the paper "Bamber, J., A. Tedstone, M. King, I. Howat, E. Enderlin, M. van den Broeke and B. Noel (2018) Land ice freshwater budget of the Arctic and North Atlantic Oceans. Part I: Data, methods and results. Journal of Geophysical Research: Oceans."'
+
+merged.runoff_tundra.attrs['description'] = 'WARNING! This variable contains runoff routed from all land tundra (i.e. including CAA, Svalbard, Iceland), whereas the paper only shows tundra runoff from Greenland. To reproduce Greenland-only runoff you must mask the tundra variable with the LSMGr mask provided in order to set all tundra runoff originating outside the Greenland land mass to zero.'
+
 merged.to_netcdf(folder_path + 'FWF17.v3.nc')
