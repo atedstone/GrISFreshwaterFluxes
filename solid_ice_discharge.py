@@ -25,7 +25,8 @@ rcParams['font.sans-serif'] = 'Arial'
 rcParams['figure.titlesize'] = 8
 
 pstere = {'init':'epsg:3413'}
-plot_figs = True
+plot_figs = False
+save_out = False
 
 ## Processing path
 # Laptop Ubuntu VM
@@ -70,7 +71,8 @@ king_locs = pd.concat([lats.T, lons.T], axis=1)
 king_locs.columns = ['latitude', 'longitude']
 geometry = [Point(xy) for xy in zip(king_locs.longitude, king_locs.latitude)]
 king_geo = gpd.GeoDataFrame({'king_name':king_locs.index}, crs={'init':'epsg:4326'}, geometry=geometry)
-king_geo.to_file(folder_path + 'outputs_Jan2018/king_locs.shp')
+if save_out:
+	king_geo.to_file(folder_path + 'outputs_Jan2018/king_locs.shp')
 king_pstere = king_geo.to_crs(pstere)
 
 
@@ -216,7 +218,8 @@ if plot_figs:
 			plt.xlim('2000-01-01', '2016-12-31')
 			n += 1
 	plt.tight_layout()
-	plt.savefig(folder_path + 'outputs_Jan2018/figures/basins_comparison.pdf')	
+	if save_out:
+		plt.savefig(folder_path + 'outputs_Jan2018/figures/basins_comparison.pdf')		
 
 
 ## Split Rignot per-basin data out to King-defined outlets using King % contributions
@@ -319,7 +322,8 @@ if plot_figs:
 	plt.plot(vals2012.index, vals2012.Discharge, marker='*', 
 		label='Bamber2012', alpha=0.6)
 	plt.legend()
-	plt.savefig(folder_path + 'outputs_Jan2018/figures/discharge_ds_comparison.pdf')
+	if save_out:
+		plt.savefig(folder_path + 'outputs_Jan2018/figures/discharge_ds_comparison.pdf')
 
 
 ## Correlation with ice-sheet-wide runoff
@@ -340,7 +344,8 @@ runoff_discharge = runoff_discharge.dropna()
 # Remove 1958 as discharge estimate is suspect
 runoff_discharge = runoff_discharge['1959':]
 
-runoff_discharge.to_csv(folder_path + 'outputs_Jan2018/runoff_discharge_values.csv')
+if save_out:
+	runoff_discharge.to_csv(folder_path + 'outputs_Jan2018/runoff_discharge_values.csv')
 
 # Define and fit model
 X = runoff_discharge.runoff
@@ -349,14 +354,16 @@ X = sm.add_constant(X)
 model = sm.OLS(y, X)
 results = model.fit()
 print(results.summary())
-with open(folder_path + 'outputs_Jan2018/runoff_discharge_model.txt', 'w') as fh:
-	print(results.summary(), file=fh)
+if save_out:
+	with open(folder_path + 'outputs_Jan2018/runoff_discharge_model.txt', 'w') as fh:
+		print(results.summary(), file=fh)
 
 if plot_figs:
 	plt.figure(figsize=(6,4))
 	runoff_discharge.plot(kind='scatter', x='runoff', y='discharge', marker='x', color='k')
 	plt.plot(runoff_discharge.runoff, results.fittedvalues, '-b')
-	plt.savefig(folder_path + 'outputs_Jan2018/figures/runoff_v_discharge.pdf')
+	if save_out:
+		plt.savefig(folder_path + 'outputs_Jan2018/figures/runoff_v_discharge.pdf')
 
 
 
@@ -375,7 +382,8 @@ if plot_figs:
 	vals2012.Discharge.rolling(5, min_periods=1).mean().plot(label='Bamber2012')
 	plt.legend()
 	plt.ylim(160, 1250)
-	plt.savefig(folder_path + 'outputs_Jan2018/figures/discharge_observed_v_estimated.pdf')
+	if save_out:
+		plt.savefig(folder_path + 'outputs_Jan2018/figures/discharge_observed_v_estimated.pdf')
 
 
 ## Attribute ice-sheet-wide solid ice discharge to specific glaciers, using monthly contrib
@@ -450,7 +458,8 @@ complete_outlet_points.index = complete_outlet_points.king_name
 complete_outlet_points_geo = complete_outlet_points.to_crs({'init':'epsg:4326'})
 # First sort alphabetically
 complete_outlet_points_geo = complete_outlet_points_geo.sort_index(axis=0)
-complete_outlet_points_geo.to_file(folder_path + 'outputs_Jan2018/complete_outlet_locs.shp')
+if save_out:
+	complete_outlet_points_geo.to_file(folder_path + 'outputs_Jan2018/complete_outlet_locs.shp')
 row_x = [r.x for r in complete_outlet_points_geo.geometry]
 row_y = [r.y for r in complete_outlet_points_geo.geometry]
 coords_df = pd.DataFrame(np.array([np.array(row_x), np.array(row_y)]), 
@@ -464,8 +473,9 @@ sid_glaciers_monthly = sid_glaciers_monthly.reindex_axis(sorted(sid_glaciers_mon
 to_export = pd.concat((coords_df, sid_glaciers_monthly), axis=0)
 # Export
 # Use 3dp to maintain monthly 'precision' even though src dataset only at 1dp
-to_export.to_csv(folder_path + 'outputs_Jan2018/sid_glaciers_monthly_coords.csv',
-	float_format='%.3f', date_format='%Y-%m-%d')
+if save_out:
+	to_export.to_csv(folder_path + 'outputs_Jan2018/sid_glaciers_monthly_coords.csv',
+		float_format='%.3f', date_format='%Y-%m-%d')
 
 
 
@@ -557,4 +567,5 @@ if grid:
 	ds.TIME.attrs['standard_name'] = 'time'
 	ds.TIME.attrs['axis'] = 'TIME'
 
-	ds.to_netcdf(folder_path + 'outputs_Jan2018/FWF17_solidice_RACMO2.3p2.nc', format='NetCDF4')
+	if save_out:
+		ds.to_netcdf(folder_path + 'outputs_Jan2018/FWF17_solidice_RACMO2.3p2.nc', format='NetCDF4')
